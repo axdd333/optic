@@ -1,0 +1,14 @@
+{
+  "name": "optic",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-optic-whitepaper.mjs",
+    "start": "node server.mjs",
+    "test": "npm run build && node --test --test-concurrency=1"
+  },
+  "devDependencies": {
+    "playwright": "^1.52.0"
+  }
+}
