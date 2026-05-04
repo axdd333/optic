@@ -20,6 +20,13 @@ import {
   zinePlates,
 } from "../src/optic_content.js";
 import { initState, opticReducer } from "../src/optic_app.js";
+import {
+  clipText,
+  genRead,
+  initInv,
+  reduceInv,
+  scrambleText,
+} from "../src/optic_investor_app.js";
 
 const banned = [
   "credit score for identity",
@@ -78,21 +85,53 @@ test("generated optic public bundle is publishable", async () => {
 test("optic motion hooks and reduced motion ship publicly", async () => {
   const html = await readFile(file("../public/optic.html"), "utf8");
   const js = await readFile(file("../public/src/optic_app.js"), "utf8");
+  const scene = await readFile(file("../public/src/optic_scene.js"), "utf8");
   const css = await readFile(file("../public/styles/optic.css"), "utf8");
+  const cinema = await readFile(file("../public/styles/optic-cinematic.css"),
+    "utf8");
   assert.match(html, /data-motion/);
+  assert.match(html, /class="optic-scene"/);
+  assert.match(html, /data-scene="hero"/);
+  assert.match(html, /optic-cinematic\.css/);
   assert.match(js, /prefers-reduced-motion/);
+  assert.match(scene, /createScene/);
+  assert.match(scene, /setMotion/);
   assert.match(css, /motion-reduced/);
+  assert.match(cinema, /73svh/);
+  assert.match(cinema, /hero-system/);
+  assert.match(cinema, /38\.2%/);
+});
+
+test("investor field guide generation is deterministic and bounded", () => {
+  const red = reduceInv(initInv, { motion: "reduced", type: "motion" });
+  assert.equal(red.motion, "reduced");
+  assert.match(genRead("network"), /calibration/);
+  assert.equal(genRead("missing"), genRead("thesis"));
+  assert.equal(scrambleText("ABC", 2), scrambleText("ABC", 2));
+  assert.equal(clipText("a ".repeat(90)).length <= 132, true);
 });
 
 function publicPaths() {
   return [
     "../public/optic.html",
     "../public/optic-investors.html",
+    "../public/legal.html",
+    "../public/legal-terms.html",
+    "../public/legal-privacy.html",
+    "../public/legal-cookies.html",
+    "../public/legal-app-privacy.html",
+    "../public/legal-notice.html",
     "../public/src/optic_app.js",
     "../public/src/optic_content.js",
     "../public/src/optic_investor_app.js",
+    "../public/src/optic_scene.js",
     "../public/styles/optic.css",
+    "../public/styles/optic-cinematic.css",
+    "../public/assets/vendor/three.module.js",
     "../public/docs/optic-whitepaper.md",
+    "../public/docs/legal/README.md",
+    "../public/docs/legal/terms.md",
+    "../public/docs/legal/privacy.md",
   ];
 }
 

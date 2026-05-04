@@ -1,0 +1,36 @@
+{
+  "buildCommand": "npm run build",
+  "cleanUrls": true,
+  "outputDirectory": "public",
+  "trailingSlash": false,
+  "rewrites": [
+    {
+      "source": "/investors",
+      "destination": "/optic-investors.html"
+    },
+    {
+      "source": "/legal",
+      "destination": "/legal.html"
+    },
+    {
+      "source": "/terms",
+      "destination": "/legal-terms.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/legal-privacy.html"
+    },
+    {
+      "source": "/cookies",
+      "destination": "/legal-cookies.html"
+    },
+    {
+      "source": "/app-privacy",
+      "destination": "/legal-app-privacy.html"
+    },
+    {
+      "source": "/notice-at-collection",
+      "destination": "/legal-notice.html"
+    }
+  ]
+}

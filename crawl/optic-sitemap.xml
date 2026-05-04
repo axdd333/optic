@@ -2,6 +2,30 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://optic.xtcftw.com/</loc>
-    <lastmod>2026-05-02</lastmod>
+    <lastmod>2026-05-04</lastmod>
+  </url>
+  <url>
+    <loc>https://optic.xtcftw.com/legal</loc>
+    <lastmod>2026-05-04</lastmod>
+  </url>
+  <url>
+    <loc>https://optic.xtcftw.com/terms</loc>
+    <lastmod>2026-05-04</lastmod>
+  </url>
+  <url>
+    <loc>https://optic.xtcftw.com/privacy</loc>
+    <lastmod>2026-05-04</lastmod>
+  </url>
+  <url>
+    <loc>https://optic.xtcftw.com/cookies</loc>
+    <lastmod>2026-05-04</lastmod>
+  </url>
+  <url>
+    <loc>https://optic.xtcftw.com/app-privacy</loc>
+    <lastmod>2026-05-04</lastmod>
+  </url>
+  <url>
+    <loc>https://optic.xtcftw.com/notice-at-collection</loc>
+    <lastmod>2026-05-04</lastmod>
   </url>
 </urlset>

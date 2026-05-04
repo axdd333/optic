@@ -13,6 +13,8 @@ const reducers = {
 };
 
 let state = initState;
+let scene;
+let sceneMod;
 
 export function opticReducer(st = initState, act = {}) {
   const fn = reducers[act.type];
@@ -36,8 +38,22 @@ function reduceView(st, act) {
 function init() {
   bind();
   initMotion();
+  initScene();
   watchPanels();
   setRouteFromHash();
+}
+
+function initScene() {
+  const root = document.querySelector(".optic-scene");
+  import("./optic_scene.js")
+    .then((mod) => startScene(mod, root))
+    .catch(() => {});
+}
+
+function startScene(mod, root) {
+  sceneMod = mod;
+  scene = mod.createScene(root, { count: 1400 });
+  scene.setMotion(state.motion);
 }
 
 function bind() {
@@ -88,6 +104,7 @@ function panelOpts() {
 function onPanel(entries) {
   const hit = entries.find((entry) => entry.isIntersecting);
   if (!hit?.target.id) return;
+  sceneMod?.setScene(sceneName(hit.target));
   setState(hit.target.id);
 }
 
@@ -118,7 +135,9 @@ function setRouteFromHash() {
 
 function setRoute(id) {
   setState(id);
-  document.getElementById(domRoute(id))?.scrollIntoView({ block: "start" });
+  const node = document.getElementById(domRoute(id));
+  if (node) sceneMod?.setScene(sceneName(node));
+  node?.scrollIntoView({ block: "start" });
 }
 
 function setState(id) {
@@ -138,7 +157,12 @@ function sync() {
   document.body.dataset.route = state.route;
   document.body.dataset.view = state.view;
   document.documentElement.classList.toggle("motion-reduced", isReduced());
+  sceneMod?.setMotion(state.motion);
   updateActiveLinks();
+}
+
+function sceneName(node) {
+  return node?.dataset.scene || "hero";
 }
 
 function updateActiveLinks() {

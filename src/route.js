@@ -4,14 +4,21 @@ const exact = {
   "/favicon.svg": "favicon.svg",
   "/favicon-32.png": "favicon-32.png",
   "/investors": "optic-investors.html",
+  "/app-privacy": "legal-app-privacy.html",
+  "/cookies": "legal-cookies.html",
+  "/legal": "legal.html",
+  "/legal/": "legal.html",
+  "/notice-at-collection": "legal-notice.html",
   "/optic-investors.html": "optic-investors.html",
   "/optic.html": "optic.html",
+  "/privacy": "legal-privacy.html",
   "/robots.txt": "robots.txt",
   "/site.webmanifest": "site.webmanifest",
   "/sitemap.xml": "sitemap.xml",
+  "/terms": "legal-terms.html",
 };
 
-const dirs = ["assets/optic/", "docs/", "src/", "styles/"];
+const dirs = ["assets/optic/", "assets/vendor/", "docs/", "src/", "styles/"];
 
 export function pickFile(path) {
   const clean = cleanPath(path);

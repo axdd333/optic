@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 
 import { loadCfg } from "./src/cfg.js";
 import { json, text } from "./src/http.js";
@@ -77,10 +78,15 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain()) {
   app().listen(cfg.port, cfg.host, onListen);
 }
 
 function onListen() {
   log.info("listen", { host: cfg.host, port: cfg.port });
+}
+
+function isMain() {
+  if (!process.argv[1]) return false;
+  return fileURLToPath(import.meta.url) === process.argv[1];
 }

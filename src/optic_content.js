@@ -1,6 +1,6 @@
 export const opticCfg = {
   canonicalUrl: "https://optic.xtcftw.com/",
-  ctaEmail: "hello@xtcftw.com",
+  ctaEmail: "hello@tryoptic.app",
   ctaSubject: "Optic pilot audit",
   description: "Optic is a private feedback layer for how people are "
     + "perceived, starting with high-stakes professional contexts, with "

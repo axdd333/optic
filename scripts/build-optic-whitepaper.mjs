@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import {
   audiences,
   auditSteps,
@@ -15,7 +15,14 @@ const pubDoc = new URL("../public/docs/optic-whitepaper.md", import.meta.url);
 
 await mkdir(new URL("../docs/", import.meta.url), { recursive: true });
 await mkdir(new URL("../public/docs/", import.meta.url), { recursive: true });
+await mkdir(new URL("../public/docs/legal/", import.meta.url), {
+  recursive: true,
+});
 await mkdir(new URL("../public/assets/optic/", import.meta.url), {
+  recursive: true,
+});
+await mkdir(new URL("../assets/vendor/", import.meta.url), { recursive: true });
+await mkdir(new URL("../public/assets/vendor/", import.meta.url), {
   recursive: true,
 });
 await mkdir(new URL("../public/src/", import.meta.url), { recursive: true });
@@ -41,21 +48,36 @@ function doc() {
 }
 
 async function syncStatic() {
+  await syncVendor();
   const jobs = copyRows().map(([src, dst]) => copyFile(url(src), url(dst)));
   await Promise.all(jobs);
-  await cp(url("../assets/optic/"), url("../public/assets/optic/"), {
-    recursive: true,
-  });
+  await syncDir("../assets/optic/", "../public/assets/optic/");
+  await syncDir("../docs/legal/", "../public/docs/legal/");
+}
+
+async function syncVendor() {
+  const src = "../node_modules/three/build/three.module.js";
+  await copyFile(url(src), url("../assets/vendor/three.module.js"));
+  await copyFile(url(src), url("../public/assets/vendor/three.module.js"));
 }
 
 function copyRows() {
   return [
     ["../optic.html", "../public/optic.html"],
     ["../optic-investors.html", "../public/optic-investors.html"],
+    ["../legal.html", "../public/legal.html"],
+    ["../legal-terms.html", "../public/legal-terms.html"],
+    ["../legal-privacy.html", "../public/legal-privacy.html"],
+    ["../legal-cookies.html", "../public/legal-cookies.html"],
+    ["../legal-app-privacy.html", "../public/legal-app-privacy.html"],
+    ["../legal-notice.html", "../public/legal-notice.html"],
     ["../src/optic_app.js", "../public/src/optic_app.js"],
     ["../src/optic_content.js", "../public/src/optic_content.js"],
     ["../src/optic_investor_app.js", "../public/src/optic_investor_app.js"],
+    ["../src/optic_scene.js", "../public/src/optic_scene.js"],
+    ["../styles/legal.css", "../public/styles/legal.css"],
     ["../styles/optic.css", "../public/styles/optic.css"],
+    ["../styles/optic-cinematic.css", "../public/styles/optic-cinematic.css"],
     ["../favicon.svg", "../public/favicon.svg"],
     ["../favicon-32.png", "../public/favicon-32.png"],
     ["../apple-touch-icon.png", "../public/apple-touch-icon.png"],
@@ -97,4 +119,17 @@ function url(path) {
 
 function clean(val) {
   return String(val).replace(/\s+/g, " ").trim();
+}
+
+async function syncDir(src, dst) {
+  await mkdir(url(dst), { recursive: true });
+  const rows = await readdir(url(src), { withFileTypes: true });
+  await Promise.all(rows.map((row) => syncEntry(src, dst, row)));
+}
+
+async function syncEntry(src, dst, row) {
+  const from = `${src}${row.name}`;
+  const to = `${dst}${row.name}`;
+  if (row.isDirectory()) return syncDir(`${from}/`, `${to}/`);
+  if (row.isFile()) return copyFile(url(from), url(to));
 }

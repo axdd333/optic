@@ -28,7 +28,8 @@ test("optic public and investor pages render without overflow", {
 async function smoke(browser, port) {
   await publicSmoke(browser, port, { height: 940, width: 1440 });
   await publicSmoke(browser, port, { height: 844, width: 390 });
-  await investorSmoke(browser, port);
+  await investorSmoke(browser, port, { height: 940, width: 1440 });
+  await investorSmoke(browser, port, { height: 844, width: 390 });
 }
 
 async function publicSmoke(browser, port, viewport) {
@@ -36,21 +37,22 @@ async function publicSmoke(browser, port, viewport) {
   const page = await ctx.newPage();
   await failEvents(page);
   await page.goto(url(port, "/"), { waitUntil: "networkidle" });
-  await waitText(page, "Know how the internet sees you.");
+  await waitText(page, "The internet already");
+  await waitText(page, "Example inference");
   await assertNoOverflow(page);
   await ctx.close();
 }
 
-async function investorSmoke(browser, port) {
-  const ctx = await browser.newContext({
-    viewport: { height: 940, width: 1440 },
-  });
+async function investorSmoke(browser, port, viewport) {
+  const ctx = await browser.newContext({ viewport });
   const page = await ctx.newPage();
   await failEvents(page);
   await page.goto(url(port, "/investors"));
-  await waitText(page, "Private feedback for how people are perceived.");
+  await waitText(page, "Investor field guide - v1.0");
+  await waitText(page, "Optic: private feedback");
   await page.click('a[href="#network"]');
-  await waitText(page, "Calibration can become a user-owned data economy.");
+  await waitText(page, "calibration can become a user-owned data economy.");
+  await waitText(page, "Investor lens: calibration");
   await assertNoOverflow(page);
   await ctx.close();
 }

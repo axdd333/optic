@@ -8,7 +8,19 @@ import { initSrv, reduceSrv } from "../src/state.js";
 test("route decisions are allow-listed", () => {
   assert.equal(pickFile("/"), "optic.html");
   assert.equal(pickFile("/investors"), "optic-investors.html");
+  assert.equal(pickFile("/legal"), "legal.html");
+  assert.equal(pickFile("/terms"), "legal-terms.html");
+  assert.equal(pickFile("/privacy"), "legal-privacy.html");
+  assert.equal(pickFile("/cookies"), "legal-cookies.html");
+  assert.equal(pickFile("/app-privacy"), "legal-app-privacy.html");
+  assert.equal(pickFile("/notice-at-collection"), "legal-notice.html");
+  assert.equal(pickFile("/docs/legal/terms.md"), "docs/legal/terms.md");
   assert.equal(pickFile("/styles/optic.css"), "styles/optic.css");
+  assert.equal(
+    pickFile("/assets/vendor/three.module.js"),
+    "assets/vendor/three.module.js",
+  );
+  assert.equal(pickFile("/docs/legal/../privacy.md"), "");
   assert.equal(pickFile("/qa/var/optic-public.png"), "");
   assert.equal(pickFile("/../server.mjs"), "");
 });
@@ -26,6 +38,7 @@ test("server serves pages, health, events, and 404s", async () => {
   const port = server.address().port;
   try {
     await assertPage(port);
+    await assertLegal(port);
     await assertEvent(port);
     await assertMissing(port);
   } finally {
@@ -36,7 +49,17 @@ test("server serves pages, health, events, and 404s", async () => {
 async function assertPage(port) {
   const res = await hit(port, "/");
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /Know how the internet sees you/);
+  const body = await res.text();
+  assert.match(body, /The internet/);
+  assert.match(body, /Example inference/);
+}
+
+async function assertLegal(port) {
+  const res = await hit(port, "/legal");
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Legal for the Optic website and app/);
+  const terms = await hit(port, "/terms");
+  assert.match(await terms.text(), /hello@tryoptic.app/);
 }
 
 async function assertEvent(port) {
