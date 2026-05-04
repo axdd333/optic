@@ -113,6 +113,7 @@ test("investor field guide generation is deterministic and bounded", () => {
 
 function publicPaths() {
   return [
+    "../public/index.html",
     "../public/optic.html",
     "../public/optic-investors.html",
     "../public/legal.html",

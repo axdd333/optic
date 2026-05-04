@@ -1,9 +1,15 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
   "cleanUrls": true,
+  "framework": null,
   "outputDirectory": "public",
   "trailingSlash": false,
   "rewrites": [
+    {
+      "source": "/",
+      "destination": "/optic.html"
+    },
     {
       "source": "/investors",
       "destination": "/optic-investors.html"

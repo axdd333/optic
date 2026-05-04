@@ -63,6 +63,7 @@ async function syncVendor() {
 
 function copyRows() {
   return [
+    ["../optic.html", "../public/index.html"],
     ["../optic.html", "../public/optic.html"],
     ["../optic-investors.html", "../public/optic-investors.html"],
     ["../legal.html", "../public/legal.html"],
