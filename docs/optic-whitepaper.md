@@ -35,7 +35,7 @@ People control what is shared and when.
 
 ### Actionable
 
-Feedback is tied to clarification, repair, or change.
+Feedback is tied to clarification, context, or change.
 
 ## First audit
 
@@ -55,9 +55,9 @@ Produce a structured view of the digital footprint.
 
 Show patterns, implications, risks, and contradictions.
 
-### Improve
+### Contextualize
 
-Identify clarification, repair, or improvement paths.
+Identify clarification or improvement paths.
 
 ### Calibrate
 
@@ -121,7 +121,7 @@ The first version of Optic is a local, opt-in audit tool.
 
 Users connect a limited set of personal data sources, such as email, calendar metadata, documents, public profiles, and local files.
 
-Optic processes this information privately on-device and produces an initial baseline: a structured view of the user's digital footprint, the patterns it reveals, and the specific areas where clarification, repair, or improvement may be useful.
+Optic processes this information privately on-device and produces an initial baseline: a structured view of the user's digital footprint, the patterns it reveals, and the specific areas where clarification, context, or improvement may be useful.
 
 This gives users immediate value without requiring them to surrender control of their data.
 
@@ -139,7 +139,7 @@ The long-term vision is a personal AI feedback system that helps people navigate
 
 As AI systems become more involved in hiring, fundraising, lending, reputation, dating, education, and daily communication, people will need their own tools to understand how they are being read.
 
-Optic becomes that layer: a private, user-controlled system for self-understanding, reputation repair, and social calibration.
+Optic becomes that layer: a private, user-controlled system for self-understanding, reputation context, and social calibration.
 
 ## 6. What Optic is not
 

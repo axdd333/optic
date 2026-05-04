@@ -58,7 +58,7 @@ export const sections = [
     "Optic processes this information privately on-device and produces an "
       + "initial baseline: a structured view of the user's digital footprint, "
       + "the patterns it reveals, and the specific areas where clarification, "
-      + "repair, or improvement may be useful.",
+      + "context, or improvement may be useful.",
     "This gives users immediate value without requiring them to surrender "
       + "control of their data.",
   ]),
@@ -79,7 +79,7 @@ export const sections = [
       + "reputation, dating, education, and daily communication, people will "
       + "need their own tools to understand how they are being read.",
     "Optic becomes that layer: a private, user-controlled system for "
-      + "self-understanding, reputation repair, and social calibration.",
+      + "self-understanding, reputation context, and social calibration.",
   ]),
   sec("trust", "What Optic is not", [
     "Optic is not a surveillance product. It is not a government social "
@@ -130,7 +130,7 @@ export const auditSteps = [
   step("Process", "Analyze the information privately on device."),
   step("Baseline", "Produce a structured view of the digital footprint."),
   step("Interpret", "Show patterns, implications, risks, and contradictions."),
-  step("Improve", "Identify clarification, repair, or improvement paths."),
+  step("Contextualize", "Identify clarification or improvement paths."),
   step("Calibrate", "Optionally contribute privacy-preserving data over time."),
 ];
 
@@ -145,7 +145,7 @@ export const principles = [
   row("Private", "User-authorized data and opt-in access."),
   row("Local first", "The first audit processes personal data on device."),
   row("User owned", "People control what is shared and when."),
-  row("Actionable", "Feedback is tied to clarification, repair, or change."),
+  row("Actionable", "Feedback is tied to clarification, context, or change."),
 ];
 
 export const brief = {
