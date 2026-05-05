@@ -2,16 +2,27 @@
   "name": "optic",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "build": "node scripts/build-optic-whitepaper.mjs",
-    "start": "node server.mjs",
-    "test": "npm run build && node --test --test-concurrency=1"
-  },
-  "devDependencies": {
-    "playwright": "^1.52.0"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
   },
   "dependencies": {
-    "three": "^0.184.0"
+    "framer-motion": "11.18.2",
+    "next": "15.3.9",
+    "react": "19.2.5",
+    "react-dom": "19.2.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.2.4",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "15.3.9",
+    "prettier": "^3.0.0",
+    "tailwindcss": "4.2.4",
+    "typescript": "^5.0.0"
   }
 }

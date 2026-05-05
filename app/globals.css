@@ -1,0 +1,73 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Colors */
+  --color-cream: #f5f3ef;
+  --color-white: #ffffff;
+  --color-black: #0e0e0c;
+  --color-ink: #1a1a18;
+  --color-muted: #6b6b67;
+  --color-border: #e2dfd8;
+  --color-tag-bg: #ededea;
+  --color-section-dark: #0e0e0c;
+  --color-section-dark-text: #f5f3ef;
+
+  /* Typography */
+  --font-editorial: var(--font-editorial), 'Playfair Display', Georgia, serif;
+  --font-serif: var(--font-editorial), 'Playfair Display', Georgia, serif;
+  --font-sans: var(--font-sans), 'DM Sans', system-ui, sans-serif;
+}
+
+:root {
+  --cream: #f5f3ef;
+  --white: #ffffff;
+  --black: #0e0e0c;
+  --ink: #1a1a18;
+  --muted: #6b6b67;
+  --border: #e2dfd8;
+  --tag-bg: #ededea;
+  --section-dark: #0e0e0c;
+  --section-dark-text: #f5f3ef;
+}
+
+html {
+  scroll-behavior: smooth;
+  font-family: var(--font-sans), 'DM Sans', system-ui, sans-serif;
+  background-color: var(--cream);
+  color: var(--ink);
+}
+
+* {
+  scroll-margin-top: 80px;
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.marquee-track {
+  animation: marquee 32s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .marquee-track {
+    animation-play-state: paused;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

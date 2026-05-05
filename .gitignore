@@ -1,6 +1,8 @@
 node_modules/
-public/
+.next/
+out/
 coverage/
 .DS_Store
 *.log
 tmp-*.png
+.env*.local
