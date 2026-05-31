@@ -2,111 +2,80 @@
 
 Private perception intelligence for high-stakes professional identity.
 
+## Overview
+
+Monorepo with two runtimes:
+
+| Directory | Runtime | Default port |
+|-----------|---------|-------------|
+| `/` | Next.js 15 — marketing site, auth, app shell | 3000 |
+| `backend/` | Python — ctxorg server + optic signal engine | 3003 |
+
+The Next.js site proxies all backend requests through `/api/backend/*` → `backend/` at port 3003.
+
 ## Setup
+
+### Frontend
 
 ```sh
 npm install
-npm test
-npm start
+npm run dev        # http://localhost:3000
 ```
 
-The local server listens on `PORT` and `HOST`.
+Copy `.env.local` from the example below and set your backend URL:
 
 ```sh
-PORT=8080 HOST=127.0.0.1 npm start
+# .env.local
+NEXT_PUBLIC_AUDIT_FORM_URL=/login
+OPTIC_BACKEND_URL=http://127.0.0.1:3003
 ```
 
-Open `http://127.0.0.1:8080/`.
+### Backend
 
-## Project Structure
-
-```text
-.
-|-- optic.html
-|-- optic-investors.html
-|-- assets/optic/
-|-- docs/optic-whitepaper.md
-|-- docs/legal/
-|-- scripts/build-optic-whitepaper.mjs
-|-- src/
-|   |-- cfg.js
-|   |-- http.js
-|   |-- log.js
-|   |-- optic_app.js
-|   |-- optic_content.js
-|   |-- optic_investor_app.js
-|   |-- route.js
-|   |-- state.js
-|   `-- static.js
-|-- styles/optic.css
-|-- tests/
-`-- qa/
+```sh
+cd backend
+cp config.example.json config.json   # edit home/target/sources for your machine
+python3 -m src.ctxorg serve --cfg config.json --host 127.0.0.1 --port 3003
 ```
 
-`qa/` contains preserved Optic review captures from the source workspace.
+Requires Python 3.11+ and [Ollama](https://ollama.ai) running locally with `phi4-mini` pulled.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  Req["HTTP request"] --> Route["route.js"]
-  Route --> Static["static.js"]
-  Route --> Event["/api/event"]
-  Route --> Health["/healthz"]
-  Static --> Page["Optic HTML/CSS/JS/assets"]
-  Event --> State["state.js counters"]
-  Health --> State
-  State --> Log["log.js structured logs"]
+```
+browser
+  └── localhost:3000  (Next.js)
+        ├── /                    marketing site
+        ├── /login, /signup      local-first auth → .optic/users.json
+        ├── /app                 signal audit UI
+        └── /api/backend/*  ──► localhost:3003  (ctxorg Python server)
+                                      ├── /api/audit        signal audit
+                                      ├── /api/audit/ml     ML detection
+                                      ├── /api/audit/batch  batch audit
+                                      ├── /api/scan         file scan
+                                      ├── /api/chat         AI chat
+                                      ├── /api/graph        workspace graph
+                                      └── /healthz
 ```
 
-## State Machine
+## Signal Audit
 
-The browser uses `opticReducer` for immutable route, motion, and view
-transitions.
+The audit engine (`backend/src/optic/signal/`) detects:
 
-```mermaid
-stateDiagram-v2
-  [*] --> home
-  home --> section: route
-  section --> brief: route=brief
-  brief --> section: route
-  section --> section: motion normal/reduced
-```
+- **Loaded language** — emotionally charged or manipulative phrasing
+- **Absolute language** — overgeneralisation (everyone, always, never)
+- **Anomalies** — unusual repetition, caps, punctuation density
+- **ML patterns** — keyword density, sentiment divergence (optional, `include_ml: true`)
 
-The server uses a small reducer for counters:
-
-```text
-req -> events -> errors
-```
-
-## Runtime
-
-- `GET /` serves the public Optic page.
-- `GET /investors` serves the investor memo.
-- `GET /legal` serves the legal website.
-- `GET /terms`, `/privacy`, `/cookies`, `/app-privacy`, and
-  `/notice-at-collection` serve public legal pages.
-- `GET /docs/legal/*.md` serves source legal drafts.
-- `POST /api/event` accepts telemetry and never blocks page use.
-- `GET /healthz` returns health and metrics counters.
-- Static routes are allow-listed and path traversal is rejected.
-
-## Build
+Example request through the proxy:
 
 ```sh
-npm run build
+curl http://localhost:3000/api/backend/api/audit \
+  -X POST -H 'Content-Type: application/json' \
+  -d '{"content": "Everyone knows this is obviously true.", "include_ml": false}'
 ```
 
-The build regenerates `docs/optic-whitepaper.md` and writes a static
-`public/` bundle for hosts that do not run Node.
+## Legal
 
-## Legal Package
-
-Optic's MVP legal stack lives in `docs/legal/`.
-
-- B2C-first, with light future business-feature language.
-- Recurring subscriptions and optional free trial mechanics.
-- Analytics-only MVP with no targeted advertising.
-- No minors or regulated sensitive-data workflows.
-- GDPR, UK GDPR, and Swiss-style rights language.
-- AI outputs and inferences are probabilistic and informational only.
+Full legal stack in `docs/legal/` — privacy, terms, cookies, compliance roadmap.
+GDPR / UK GDPR / Swiss-style rights language. B2C-first, no minors, no targeted advertising.
