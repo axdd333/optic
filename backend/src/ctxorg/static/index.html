@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Optic</title>
+    <link rel="icon" href="data:,">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap">
+    <link rel="stylesheet" href="/static/app.css?v=20260517-v46">
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  </head>
+  <body>
+    <main class="app">
+
+      <!-- TOPBAR: logo + actions only (mode nav is in leftnav) -->
+      <header class="topbar" role="banner">
+        <div id="topbarLogo" class="topbar-logo" aria-label="Optic">
+          <img id="logoLockup" class="logo-lockup"
+            src="/static/brand/optic-lockup.svg" alt="Optic"
+            width="176" height="34" decoding="async" fetchpriority="high">
+          <span id="logoFallback" class="logo-fallback" hidden>Optic</span>
+        </div>
+        <div id="topbarActions" class="topbar-actions" role="group"
+          aria-label="Workspace controls">
+          <input id="search" type="search" placeholder="Search your universe..."
+            aria-label="Search indexed files" title="Search indexed files">
+          <button id="scanBtn" class="topbar-btn"
+            aria-label="Sync now" title="Sync now">
+            Sync
+          </button>
+          <select id="run" class="topbar-run" aria-label="Select run context"
+            title="Select run context"></select>
+          <div id="topbarPresenceBtn" class="topbar-presence" role="status"
+            aria-live="polite" aria-label="Local privacy status"
+            title="Local privacy status">
+            <span class="topbar-presence-dot" aria-hidden="true"></span>
+          </div>
+          <button id="topbarAvatarBtn" class="topbar-avatar" type="button"
+            aria-label="Open account settings" title="Open account settings"
+            aria-controls="settingsOverlay" aria-haspopup="dialog"
+            data-settings-entry="contextual">
+            <span class="topbar-avatar-initial" aria-hidden="true">A</span>
+            <span class="topbar-avatar-label">Account</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- LEFT SIDEBAR: context nav -->
+      <nav class="leftnav" aria-label="Primary navigation"
+        data-nav-model="primary">
+        <div class="leftnav-heading">Overview</div>
+        <div class="leftnav-primary">
+          <button class="leftnav-item active" data-mode="workstreams">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M2 6.5L8 2l6 4.5V14H2V6.5z"/>
+            </svg>
+            <span>Home</span>
+          </button>
+          <button class="leftnav-item" data-mode="topology">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/>
+            </svg>
+            <span>Map</span>
+          </button>
+          <button class="leftnav-item" data-mode="timeline">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <line x1="2" y1="5" x2="14" y2="5"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="11" x2="14" y2="11"/>
+            </svg>
+            <span>Timeline</span>
+          </button>
+          <button class="leftnav-item" data-mode="universe">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/>
+              <rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>
+            </svg>
+            <span>Universe</span>
+          </button>
+        </div>
+
+        <div class="leftnav-divider"></div>
+
+        <div class="leftnav-heading">Data &amp; tools</div>
+        <div class="leftnav-secondary">
+          <button class="leftnav-item" data-mode="iris">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="8" cy="8" r="5.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><line x1="8" y1="8.5" x2="10.5" y2="10"/>
+            </svg>
+            <span>Iris</span>
+          </button>
+          <button class="leftnav-item" data-mode="vault">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="4" width="12" height="9" rx="1.5"/><line x1="5" y1="4" x2="5" y2="2"/><line x1="11" y1="4" x2="11" y2="2"/>
+            </svg>
+            <span>Vault</span>
+            <span class="leftnav-chip">Local</span>
+          </button>
+          <button class="leftnav-item" data-mode="audiences">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="5.5" cy="6" r="2.5"/><circle cx="10.5" cy="6" r="2.5"/>
+              <path d="M1 13c0-2 2-3.5 4.5-3.5S9 11 10.5 11s3.5-1 3.5-3.5"/>
+            </svg>
+            <span>Audiences</span>
+          </button>
+          <button class="leftnav-item" data-mode="simulations">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
+              stroke="currentColor" stroke-width="1.5">
+              <path d="M5 2h6M4 2h8M6 6h4l3 6H3l3-6z"/>
+              <path d="M8 2v4"/>
+            </svg>
+            <span>Simulations</span>
+          </button>
+          <div class="leftnav-divider"></div>
+          <button class="leftnav-item" data-mode="exports">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
+              stroke="currentColor" stroke-width="1.5">
+              <path d="M8 12V3"/><path d="M5 6l3-3 3 3"/>
+              <rect x="2.5" y="11.5" width="11" height="2" rx="1"/>
+            </svg>
+            <span>Exports</span>
+          </button>
+          <div class="leftnav-heading leftnav-heading--inline">System</div>
+          <button id="leftnavSettingsBtn" class="leftnav-item"
+            type="button" aria-label="Open settings"
+            data-settings-entry="primary">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
+              stroke="currentColor" stroke-width="1.4">
+              <circle cx="8" cy="8" r="2.2"/>
+              <path d="M8 2.1v1.4M8 12.5v1.4M13.9 8h-1.4M3.5 8H2.1"/>
+              <path d="M12.2 3.8l-1 1M4.8 11.2l-1 1M12.2 12.2l-1-1M4.8 4.8l-1-1"/>
+            </svg>
+            <span>Settings</span>
+          </button>
+          <button class="leftnav-item leftnav-item--dim">
+            <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
+              stroke="currentColor" stroke-width="1.4">
+              <circle cx="8" cy="8" r="6"/>
+              <path d="M8 11V7m0-2h.01"/>
+            </svg>
+            <span>Help</span>
+          </button>
+        </div>
+
+        <div class="leftnav-footer">
+          <div class="leftnav-privacy">
+            <span class="privacy-dot"></span>
+            <div>
+              <div class="privacy-title">Local vault</div>
+              <div class="privacy-sub">Your data never leaves your machine.</div>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <nav class="mobile-nav" id="mobileNav"
+        aria-label="Primary navigation (mobile)" data-nav-model="primary">
+        <button class="mobile-nav-item active" data-mode="workstreams">
+          <span>Home</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="topology">
+          <span>Map</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="timeline">
+          <span>Timeline</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="universe">
+          <span>Universe</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="iris">
+          <span>Iris</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="vault">
+          <span>Vault</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="audiences">
+          <span>Audiences</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="simulations">
+          <span>Sims</span>
+        </button>
+        <button class="mobile-nav-item" data-mode="exports">
+          <span>Exports</span>
+        </button>
+      </nav>
+
+      <!-- SETTINGS OVERLAY -->
+      <div id="settingsOverlay" class="settings-overlay" hidden>
+        <div class="settings-panel glass">
+
+          <div class="settings-head">
+            <span class="settings-title">Settings</span>
+            <button id="settingsClose" class="settings-close">✕</button>
+          </div>
+
+          <!-- Account -->
+          <div class="settings-section">
+            <div class="settings-section-label">Account</div>
+            <div class="settings-account-card" id="settingsAccountCard">
+              <div class="settings-avatar" id="settingsAvatar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="22" height="22">
+                  <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+                </svg>
+              </div>
+              <div class="settings-acct-info">
+                <div class="settings-acct-name" id="settingsName">Not signed in</div>
+                <div class="settings-acct-email" id="settingsEmail">Sync your vault across devices</div>
+              </div>
+              <button class="settings-acct-btn" id="settingsSignBtn">Sign in</button>
+            </div>
+            <div class="settings-providers" id="settingsProviders" hidden>
+              <button class="provider-btn" id="providerGoogle">
+                <svg viewBox="0 0 24 24" width="15" height="15"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                Continue with Google
+              </button>
+              <button class="provider-btn" id="providerApple">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                Continue with Apple
+              </button>
+              <div class="provider-divider"><span>or</span></div>
+              <button class="provider-btn provider-btn--email" id="providerEmail">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
+                Continue with email
+              </button>
+              <form class="provider-form" id="providerForm" hidden>
+                <div class="provider-form-title" id="providerTitle">
+                  Create local account
+                </div>
+                <input id="providerName" type="text"
+                  placeholder="Full name" autocomplete="name">
+                <input id="providerEmailInput" type="email"
+                  placeholder="you@example.com" autocomplete="email"
+                  required>
+                <button class="provider-submit" id="providerSubmit"
+                  type="submit">
+                  Create account
+                </button>
+                <div class="provider-err" id="providerErr" hidden></div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Vault -->
+          <div class="settings-section">
+            <div class="settings-section-label">Vault</div>
+            <div class="settings-row">
+              <span class="settings-row-lbl">Files indexed</span>
+              <span class="settings-row-val" id="settingsFileCount">—</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-lbl">Total size</span>
+              <span class="settings-row-val" id="settingsTotalSize">—</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-lbl">Storage</span>
+              <span class="settings-row-val">Local · on-device only</span>
+            </div>
+          </div>
+
+          <!-- Exporter -->
+          <div class="settings-section">
+            <div class="settings-section-label">Exporter</div>
+            <div class="settings-export-row">
+              <select id="settingsExportKind" class="settings-export-select">
+                <option value="report">Run report (JSON)</option>
+                <option value="workstreams">Workstreams (JSON)</option>
+                <option value="graph">Graph (JSON)</option>
+                <option value="bundle">Bundle (JSON)</option>
+              </select>
+              <button id="settingsExportBtn" class="settings-export-btn">
+                Export
+              </button>
+            </div>
+            <div class="settings-export-msg" id="settingsExportMsg">
+              Exports use the currently selected run.
+            </div>
+          </div>
+
+          <!-- Preferences -->
+          <div class="settings-section">
+            <div class="settings-section-label">Preferences</div>
+            <div class="settings-row settings-row--toggle">
+              <span class="settings-row-lbl">Auto-scan on launch</span>
+              <label class="toggle-sw"><input type="checkbox" id="prefAutoScan" checked><span class="toggle-track"></span></label>
+            </div>
+            <div class="settings-row settings-row--toggle">
+              <span class="settings-row-lbl">Reduce motion</span>
+              <label class="toggle-sw"><input type="checkbox" id="prefReduceMotion"><span class="toggle-track"></span></label>
+            </div>
+            <div class="settings-row settings-row--toggle">
+              <span class="settings-row-lbl">Show edge labels</span>
+              <label class="toggle-sw"><input type="checkbox" id="prefEdgeLabels" checked><span class="toggle-track"></span></label>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-label">Automation</div>
+            <div class="settings-row settings-row--toggle">
+              <span class="settings-row-lbl">Daily digest enabled</span>
+              <label class="toggle-sw"><input id="settingsDigestEnabled"
+                type="checkbox"><span class="toggle-track"></span></label>
+            </div>
+            <div class="settings-export-row">
+              <input id="settingsDigestCron" class="settings-export-select"
+                placeholder="Cron (m h * * *)">
+              <input id="settingsDigestTz" class="settings-export-select"
+                placeholder="Timezone (e.g. America/New_York)">
+            </div>
+            <div class="settings-export-row">
+              <button id="settingsDigestSave" class="settings-export-btn">
+                Save automation
+              </button>
+              <button id="settingsDigestQueueNow" class="settings-export-btn">
+                Queue now
+              </button>
+            </div>
+            <div class="settings-export-msg" id="settingsDigestStatus">—</div>
+            <div class="settings-export-msg" id="settingsDigestMsg">Ready.</div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-label">AI Runtime</div>
+            <div class="settings-export-row">
+              <select id="settingsLlmProviderMode" class="settings-export-select">
+                <option value="ollama">Ollama</option>
+                <option value="mirofish">Mirofish</option>
+              </select>
+              <input id="settingsChatModel" class="settings-export-select"
+                placeholder="chat model">
+              <input id="settingsInferModel" class="settings-export-select"
+                placeholder="infer model">
+            </div>
+            <div class="settings-export-row">
+              <input id="settingsIrisModel" class="settings-export-select"
+                placeholder="iris model">
+              <input id="settingsHomeModel" class="settings-export-select"
+                placeholder="home model">
+              <input id="settingsWorkstreamsModel" class="settings-export-select"
+                placeholder="workstreams model">
+            </div>
+            <div class="settings-export-row">
+              <button id="settingsLlmSave" class="settings-export-btn">
+                Save runtime
+              </button>
+            </div>
+            <div class="settings-export-msg" id="settingsLlmMsg">Ready.</div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-label">Channel Readiness</div>
+            <div id="settingsChannelRows" class="settings-channel-list">
+              Loading integration health…
+            </div>
+            <div class="settings-export-msg" id="settingsCatalogMsg">
+              Live readiness for email, social, and webhooks.
+            </div>
+          </div>
+
+          <!-- About -->
+          <div class="settings-section settings-section--last">
+            <div class="settings-section-label">About</div>
+            <div class="settings-row">
+              <span class="settings-row-lbl">Version</span>
+              <span class="settings-row-val">0.1.0-beta</span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-lbl">Model</span>
+              <span class="settings-row-val" id="settingsModelValue">
+                Runtime model · local
+              </span>
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-lbl">Built by</span>
+              <span class="settings-row-val">Neurontology</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- CENTER: canvas / cards / onboard -->
+      <section class="canvas-area">
+        <section class="viewport">
+          <canvas id="scene" tabindex="0"></canvas>
+          <div id="cluster-labels" class="cluster-labels-layer" hidden></div>
+          <div id="mapToolbar" class="map-toolbar" hidden>
+            <button class="map-tool active" data-tool="pan" title="Pan">✥</button>
+            <button class="map-tool" data-tool="focus" title="Focus selection">◎</button>
+            <div class="map-toolbar-sep"></div>
+            <button class="map-zoom-out" title="Zoom out">−</button>
+            <span class="map-zoom-val">100%</span>
+            <button class="map-zoom-in" title="Zoom in">+</button>
+          </div>
+          <div id="mapHint" class="canvas-hint" hidden>
+            Drag to pan · Scroll to zoom · Click to select
+          </div>
+          <div id="workspace-cards" class="workspace-cards" hidden></div>
+          <div id="onboard" class="onboard-wrap" hidden></div>
+          <div id="tooltip" class="tooltip" hidden></div>
+        </section>
+      </section>
+
+      <!-- RIGHT: glass context panel -->
+      <aside class="side glass">
+        <section id="inspector" class="inspector"></section>
+        <section class="iris-console">
+          <div class="iris-modebar" id="irisModebar" role="tablist"
+            aria-label="Iris modes">
+            <button data-imode="report" class="active" role="tab"
+              aria-selected="true" type="button">Report</button>
+            <button data-imode="entity" role="tab"
+              aria-selected="false" type="button">Entity</button>
+            <button data-imode="compare" role="tab"
+              aria-selected="false" type="button">Compare</button>
+            <button data-imode="audience" role="tab"
+              aria-selected="false" type="button">Audience</button>
+            <button data-imode="contradiction" role="tab"
+              aria-selected="false" type="button">Scan</button>
+            <button data-imode="audit" role="tab"
+              aria-selected="false" type="button">Audit</button>
+            <button data-imode="mirror" role="tab"
+              aria-selected="false" type="button">Mirror</button>
+            <button data-imode="retune" role="tab"
+              aria-selected="false" type="button">Retune</button>
+            <button id="clearChat" type="button" aria-label="Clear chat">
+              Clear
+            </button>
+          </div>
+          <div id="irisEntityBar" class="iris-entity-bar" style="display:none">
+            <span id="irisEntityLabel" class="entity-label">No file selected</span>
+            <select id="irisAudienceSelect" style="display:none">
+              <option value="recruiter">Recruiter</option>
+              <option value="investor">Investor</option>
+              <option value="adversarial">Adversarial</option>
+              <option value="algorithm">Algorithm (ATS)</option>
+              <option value="professor">Professor</option>
+              <option value="lender">Lender</option>
+            </select>
+          </div>
+          <div id="messages" class="messages"></div>
+          <div class="chips" id="irisChips">
+            <button data-q="What's using the most space?">Most space?</button>
+            <button data-q="What should I delete?">What to delete?</button>
+            <button data-q="Find duplicate files">Find duplicates</button>
+          </div>
+          <form id="chatForm" class="chatbox">
+            <div class="chatbox-pill">
+              <span class="chatbox-iris-icon" aria-hidden="true"></span>
+              <textarea id="draft" rows="1" placeholder="Ask Iris…"></textarea>
+            </div>
+            <button class="chatbox-send" aria-label="Send">↑</button>
+          </form>
+        </section>
+      </aside>
+
+      <!-- STATUS BAR: full-width -->
+      <footer class="statusbar" aria-label="Workspace status">
+        <span class="statusbar-privacy statusbar-cell" role="group"
+          aria-label="Privacy status">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+            stroke-width="1.5" aria-hidden="true">
+            <path d="M8 1.5l5 2v3.7c0 3-1.9 5.8-5 7-3.1-1.2-5-4-5-7V3.5l5-2z"/>
+            <path d="M6.2 7.9L7.4 9l2.5-2.7"/>
+          </svg>
+          All analysis is private and local
+        </span>
+        <span class="statusbar-cell" role="group"
+          aria-labelledby="statusbarIndexLabel statusbarIndex">
+          <span class="statusbar-k" id="statusbarIndexLabel">Index status</span>
+          <span class="statusbar-v" id="statusbarIndex" aria-live="polite">
+            Up to date · —
+          </span>
+        </span>
+        <span class="statusbar-cell" role="group"
+          aria-labelledby="statusSignalsLabel statusSignals">
+          <span class="statusbar-k" id="statusSignalsLabel">Signals indexed</span>
+          <span class="statusbar-v" id="statusSignals" aria-live="polite">
+            — of —
+          </span>
+        </span>
+        <span class="statusbar-cell" role="group"
+          aria-labelledby="statusRunLabel statusRun">
+          <span class="statusbar-k" id="statusRunLabel">Run context</span>
+          <span class="statusbar-v" id="statusRun" aria-live="polite">—</span>
+        </span>
+        <span class="statusbar-cell statusbar-version" role="group"
+          aria-label="Application version">
+          Optic v1.0.0
+        </span>
+      </footer>
+
+    </main>
+    <div id="audienceModal" class="audience-modal-overlay" hidden>
+      <div class="audience-modal glass" role="dialog" aria-modal="true"
+        aria-labelledby="audienceModalName">
+        <div class="audience-modal-head">
+          <div class="audience-modal-who">
+            <span class="audience-modal-icon">👤</span>
+            <div>
+              <div class="audience-modal-name" id="audienceModalName">
+                Recruiter read
+              </div>
+              <div class="audience-modal-sub">
+                How they read your footprint
+              </div>
+            </div>
+          </div>
+          <div class="audience-modal-score">
+            <span class="audience-score-num">0%</span>
+            <span class="audience-score-lbl">match</span>
+          </div>
+          <button class="audience-modal-close" type="button"
+            aria-label="Close audience simulation">✕</button>
+        </div>
+        <div class="audience-modal-body">
+          <div class="audience-section">
+            <div class="audience-section-title">WHAT THEY SEE</div>
+            <div class="audience-narrative"></div>
+          </div>
+          <div class="audience-section">
+            <div class="audience-section-title">YOUR STRONGEST SIGNALS</div>
+            <div class="audience-highlights"></div>
+          </div>
+          <div class="audience-section">
+            <div class="audience-section-title">GAPS & RISKS</div>
+            <div class="audience-risks"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="/static/app.js?v=20260517-v46"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <linearGradient id="optic_ring" x1="4" y1="4" x2="20" y2="20"
+      gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9DA9DA"/>
+      <stop offset=".52" stop-color="#5F70B3"/>
+      <stop offset="1" stop-color="#28325D"/>
+    </linearGradient>
+    <linearGradient id="optic_core" x1="9" y1="9" x2="15" y2="15"
+      gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#DCE4FF"/>
+      <stop offset="1" stop-color="#8FA2EB"/>
+    </linearGradient>
+  </defs>
+  <circle cx="12" cy="12" r="7.2" stroke="url(#optic_ring)"
+    stroke-width="2.3"/>
+  <circle cx="12" cy="12" r="2.7" fill="url(#optic_core)"/>
+  <circle cx="18.35" cy="7.65" r="1.35" fill="#7990E1"/>
+</svg>

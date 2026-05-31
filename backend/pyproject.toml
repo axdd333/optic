@@ -1,0 +1,10 @@
+[project]
+name = "ctxorg"
+version = "0.1.0"
+description = "Context graph file organizer for local Gemma and OCR"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+

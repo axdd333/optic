@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Optic Audit Report — {{ audit.id }}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+            padding: 40px;
+        }
+        h1 {
+            font-size: 1.8em;
+            color: #1a1a2e;
+            margin-bottom: 5px;
+        }
+        .subtitle {
+            color: #6c757d;
+            font-size: 0.95em;
+            margin-bottom: 25px;
+        }
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 25px;
+        }
+        .meta-item { font-size: 0.9em; }
+        .meta-item strong { color: #495057; display: block; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+        .meta-item span { color: #212529; }
+        .summary-box {
+            background: #e3f2fd;
+            border-left: 4px solid #1976d2;
+            padding: 14px 18px;
+            border-radius: 6px;
+            margin-bottom: 25px;
+        }
+        h2 {
+            font-size: 1.3em;
+            color: #2c3e50;
+            margin: 25px 0 12px;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 8px;
+        }
+        .score-badge {
+            display: inline-block;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 1em;
+            margin-bottom: 15px;
+        }
+        .score-low { background: #e8f5e9; color: #2e7d32; }
+        .score-medium { background: #fff3e0; color: #e65100; }
+        .score-high { background: #fce4ec; color: #c62828; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
+            font-size: 0.9em;
+        }
+        th {
+            background: #f1f3f5;
+            font-weight: 600;
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 2px solid #dee2e6;
+            color: #495057;
+        }
+        td {
+            padding: 9px 12px;
+            border-bottom: 1px solid #e9ecef;
+            vertical-align: top;
+        }
+        tr:hover { background: #f8f9fa; }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-critical { background: #dc3545; }
+        .badge-high { background: #fd7e14; }
+        .badge-medium { background: #ffc107; color: #333; }
+        .badge-low { background: #28a745; }
+        .badge-info { background: #17a2b8; }
+        .no-data {
+            text-align: center;
+            padding: 30px;
+            color: #6c757d;
+            font-style: italic;
+        }
+        .recommendations {
+            background: #fff8e1;
+            border-left: 4px solid #f9a825;
+            padding: 14px 18px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .recommendations ul { margin: 5px 0 0 20px; }
+        .footer {
+            margin-top: 30px;
+            color: #adb5bd;
+            font-size: 0.8em;
+            text-align: center;
+            border-top: 1px solid #e9ecef;
+            padding-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Optic Audit Report</h1>
+        <p class="subtitle">Audit the perceived signal, not the person.</p>
+
+        <div class="meta-grid">
+            <div class="meta-item"><strong>Audit ID</strong><span>{{ audit.id }}</span></div>
+            <div class="meta-item"><strong>Source</strong><span>{{ audit.source }}</span></div>
+            <div class="meta-item"><strong>Created</strong><span>{{ audit.created_at }}</span></div>
+            <div class="meta-item"><strong>Generated</strong><span>{{ generated_at }}</span></div>
+            {% if audit.score is defined and audit.score is not none %}
+            <div class="meta-item"><strong>Overall Score</strong><span>{{ "%.3f"|format(audit.score) }}</span></div>
+            {% endif %}
+        </div>
+
+        {% if audit.content_summary %}
+        <div class="summary-box">
+            <strong>Content:</strong> {{ audit.content_summary }}
+        </div>
+        {% endif %}
+
+        {% set score = audit.get('score') %}
+        {% if score is not none %}
+            {% set score_class = 'score-low' if score < 0.3 else ('score-medium' if score < 0.7 else 'score-high') %}
+            <div class="score-badge {{ score_class }}">Score: {{ "%.3f"|format(score) }}</div>
+        {% endif %}
+
+        {% if audit.recommendations %}
+        <div class="recommendations">
+            <strong>Recommendations</strong>
+            <ul>
+            {% for rec in audit.recommendations %}
+                <li>{{ rec }}</li>
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <h2>Detections ({{ audit.detections|length }})</h2>
+
+        {% if audit.detections %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Attribute</th>
+                    <th>Severity</th>
+                    <th>Confidence</th>
+                    <th>Source</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for d in audit.detections %}
+                <tr>
+                    <td><strong>{{ d.attribute }}</strong></td>
+                    <td><span class="badge badge-{{ d.severity|lower }}">{{ d.severity }}</span></td>
+                    <td>{{ "%.3f"|format(d.confidence) }}</td>
+                    <td>{{ d.source }}</td>
+                    <td>{{ d.description }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="no-data">No detections found — signal appears clean.</div>
+        {% endif %}
+    </div>
+    <div class="footer">
+        Generated by Optic v0.1.0 on {{ generated_at }}
+    </div>
+</body>
+</html>

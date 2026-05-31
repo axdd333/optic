@@ -1,0 +1,46 @@
+{
+  "home": "/Users/yourname",
+  "target": "/Users/yourname",
+  "state_dir": ".ctxorg/state",
+  "model": "phi4-mini",
+  "fast_model": "phi4-mini",
+  "provider_mode": "ollama",
+  "provider_fallback_ollama": true,
+  "fallback_model": "qwen3:1.7b",
+  "infer_model": "phi4-mini-reasoning",
+  "infer_fallback_model": "qwen3:4b",
+  "chat_model": "phi4-mini",
+  "ollama_url": "http://127.0.0.1:11434",
+  "keep_alive": "30s",
+  "num_ctx": 4096,
+  "workers": 4,
+  "ocr_workers": 2,
+  "llm_workers": 1,
+  "max_scan_items": 200000,
+  "ui_node_limit": 1200,
+  "skip_dataless": true,
+  "min_free_gb": 12,
+  "sources": [
+    "/Users/yourname/Desktop",
+    "/Users/yourname/Documents",
+    "/Users/yourname/Downloads"
+  ],
+  "protected": [
+    "/System",
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/private",
+    "/dev",
+    "/Applications"
+  ],
+  "prune_dirs": [
+    ".Trash", ".cache", ".npm", "__pycache__", ".git",
+    ".venv", "venv", "node_modules", ".next", "dist", "build"
+  ],
+  "categories": [
+    "Developer/Projects", "Developer/Code",
+    "Documents/Work", "Documents/Learning",
+    "Documents/Notes", "Documents/Finance"
+  ]
+}

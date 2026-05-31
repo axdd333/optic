@@ -6,3 +6,11 @@ coverage/
 *.log
 tmp-*.png
 .env*.local
+
+# Local data stores — never commit real user data
+.optic/
+backend/.ctxorg/
+backend/config.json
+backend/__pycache__/
+backend/src/**/__pycache__/
+**/*.pyc

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 218 42" fill="none"
+  role="img" aria-label="Optic" shape-rendering="geometricPrecision">
+  <defs>
+    <linearGradient id="optic_ring" x1="7" y1="7" x2="29" y2="29"
+      gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9DA9DA"/>
+      <stop offset=".52" stop-color="#5F70B3"/>
+      <stop offset="1" stop-color="#28325D"/>
+    </linearGradient>
+    <linearGradient id="optic_core" x1="13" y1="13" x2="23" y2="23"
+      gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#DCE4FF"/>
+      <stop offset="1" stop-color="#8FA2EB"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(2 2)">
+    <circle cx="17" cy="17" r="10" stroke="url(#optic_ring)"
+      stroke-width="3"/>
+    <circle cx="17" cy="17" r="4" fill="url(#optic_core)"/>
+    <circle cx="25.8" cy="10.4" r="1.9" fill="#7990E1"/>
+  </g>
+  <text x="45" y="29" fill="#0d0f1c"
+    font-family="Sora, Manrope, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    font-size="34" font-weight="620" letter-spacing="-1.18">Optic</text>
+</svg>
