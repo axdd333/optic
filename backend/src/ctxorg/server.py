@@ -62,7 +62,8 @@ _AUDIT_HISTORY_MAX = 500
 # ---------------------------------------------------------------------------
 # Optic signal engine — lazy import so ctxorg starts even if optic is absent
 # ---------------------------------------------------------------------------
-_OPTIC_SRC = str(Path(__file__).resolve().parents[2] / "optic")
+# backend/src/ctxorg/server.py → parents[1] = backend/src/ which contains optic/
+_OPTIC_SRC = str(Path(__file__).resolve().parents[1])
 if _OPTIC_SRC not in sys.path:
     sys.path.insert(0, _OPTIC_SRC)
 
