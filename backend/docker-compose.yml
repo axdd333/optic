@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  optic:
+    build: .
+    container_name: optic-v1
+    ports:
+      - "${OPTIC_PORT:-3003}:3003"
+    environment:
+      - OPTIC_HOST=0.0.0.0
+      - OPTIC_PORT=3003
+      - OPTIC_DATA_DIR=/root/.optic
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-sk-ef42d79c0ff64ba9bd21c011638397f6}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
+    volumes:
+      - optic_data:/root/.optic
+    restart: unless-stopped
+
+volumes:
+  optic_data:

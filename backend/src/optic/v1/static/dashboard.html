@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Optic V1 — Dashboard</title>
+<style>
+:root{--bg:#09090b;--panel:#0d0d12;--border:#1a1a24;--border-hi:#2a2a3a;--text:#d4d4d8;--muted:#71717a;--accent:#a78bfa;--green:#10b981;--amber:#f59e0b;--red:#ef4444;--cyan:#22d3ee;--font:'JetBrains Mono',monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;font-size:12px;line-height:1.6}
+.header{border-bottom:1px solid var(--border);padding:16px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:var(--bg);z-index:10}
+.header-l{display:flex;align-items:center;gap:12px}
+.logo{font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.12em;text-transform:uppercase}
+.logo span{color:var(--muted);font-weight:400}
+.pill{display:inline-block;padding:2px 10px;border-radius:3px;font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.pill-live{background:#10b98120;color:var(--green);border:1px solid #10b98140}
+.pill-off{background:#ef444420;color:var(--red);border:1px solid #ef444440}
+.nav-link{color:var(--muted);text-decoration:none;font-size:10px;padding:4px 10px;border:1px solid var(--border);border-radius:4px;transition:all .15s}
+.nav-link:hover{color:var(--accent);border-color:var(--accent)}
+.container{max-width:1100px;margin:0 auto;padding:24px}
+.stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
+.stat-card{background:var(--panel);border:1px solid var(--border);padding:16px;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;width:100%;height:2px}
+.stat-card.s0::before{background:var(--accent)}
+.stat-card.s1::before{background:var(--cyan)}
+.stat-card.s2::before{background:var(--red)}
+.stat-card.s3::before{background:var(--amber)}
+.stat-card.s4::before{background:var(--green)}
+.stat-num{font-size:28px;font-weight:700;color:var(--text);margin-bottom:2px}
+.stat-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+.stat-sub{font-size:10px;color:var(--muted);margin-top:4px}
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px}
+.panel{background:var(--panel);border:1px solid var(--border);overflow:hidden}
+.panel-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
+.panel-count{color:var(--accent);font-size:10px}
+.panel-body{padding:8px 0;max-height:420px;overflow-y:auto}
+.claim-row,.repair-row{display:flex;align-items:flex-start;padding:10px 16px;border-bottom:1px solid var(--border);gap:10px;transition:background .12s}
+.claim-row:hover,.repair-row:hover{background:rgba(255,255,255,.02)}
+.claim-sev{font-size:9px;padding:1px 6px;border-radius:3px;font-weight:600;text-transform:uppercase;flex-shrink:0;margin-top:2px}
+.sev-critical{background:#ef444420;color:var(--red)}
+.sev-high{background:#f59e0b20;color:var(--amber)}
+.sev-medium{background:#a78bfa20;color:var(--accent)}
+.sev-low{background:#22d3ee20;color:var(--cyan)}
+.claim-body{flex:1;min-width:0}
+.claim-title{font-size:11px;font-weight:600;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.claim-audience{font-size:9px;color:var(--muted)}
+.claim-lens{display:inline-block;font-size:8px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;color:var(--muted);margin-top:3px}
+.repair-priority{font-size:9px;min-width:42px;text-align:right;flex-shrink:0}
+.repair-pnum{font-weight:700;font-size:14px}
+.repair-plabel{font-size:8px;color:var(--muted);text-transform:uppercase}
+.repair-body{flex:1;min-width:0}
+.repair-title{font-size:11px;font-weight:600;margin-bottom:2px}
+.repair-meta{font-size:9px;color:var(--muted);display:flex;gap:12px}
+.repair-status{font-size:8px;padding:1px 6px;border-radius:3px;font-weight:600;text-transform:uppercase;flex-shrink:0;margin-top:2px}
+.stat-pending{background:#f59e0b20;color:var(--amber)}
+.stat-done{background:#10b98120;color:var(--green)}
+.empty{text-align:center;padding:32px 16px;color:var(--muted);font-size:10px}
+.skeleton{background:linear-gradient(90deg,var(--border) 25%,transparent 50%,var(--border) 75%);background-size:200% 100%;animation:shim 1.5s infinite;border-radius:3px}
+@keyframes shim{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.footer{padding:16px 24px;border-top:1px solid var(--border);text-align:center;font-size:9px;color:var(--muted)}
+.footer a{color:var(--accent);text-decoration:none}
+.mono{font-feature-settings:"ss01","zero"}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-l">
+    <div class="logo">Optic <span>V1</span></div>
+    <span class="pill pill-live" id="statusPill">LOADING</span>
+  </div>
+  <div>
+    <a class="nav-link" href="/onboarding">→ Onboarding</a>
+  </div>
+</div>
+
+<div class="container">
+  <!-- STATS GRID -->
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card s0"><div class="stat-num skeleton" style="width:48px;height:28px">&nbsp;</div><div class="stat-label">Users</div></div>
+    <div class="stat-card s1"><div class="stat-num skeleton" style="width:48px;height:28px">&nbsp;</div><div class="stat-label">Claims</div></div>
+    <div class="stat-card s2"><div class="stat-num skeleton" style="width:48px;height:28px">&nbsp;</div><div class="stat-label">Risks</div></div>
+    <div class="stat-card s3"><div class="stat-num skeleton" style="width:48px;height:28px">&nbsp;</div><div class="stat-label">Pending Repairs</div></div>
+    <div class="stat-card s4"><div class="stat-num skeleton" style="width:48px;height:28px">&nbsp;</div><div class="stat-label">Reports</div></div>
+  </div>
+
+  <!-- RECENT CLAIMS + REPAIR QUEUE -->
+  <div class="panels">
+    <div class="panel">
+      <div class="panel-head"><span>Recent Claims</span><span class="panel-count" id="claimCount">—</span></div>
+      <div class="panel-body" id="claimsList"><div class="empty">Loading…</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span>Repair Queue</span><span class="panel-count" id="repairCount">—</span></div>
+      <div class="panel-body" id="repairsList"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  Optic V1 · <span id="footerVer">v0.0.0</span> · <span id="footerRoutes">—</span> routes ·
+  <span class="mono" id="footerUptime">—</span> ·
+  <a href="/onboarding">onboarding</a>
+</div>
+
+<script>
+const API='http://localhost:3003/api/v1';
+
+function sevClass(s){return{critical:'sev-critical',high:'sev-high',medium:'sev-medium',low:'sev-low'}[s]||'sev-low'}
+
+async function load(){
+  const sg=document.getElementById('statsGrid');
+  const cl=document.getElementById('claimsList');
+  const rl=document.getElementById('repairsList');
+  try{
+    const r=await fetch(`${API}/status`);
+    if(!r.ok)throw new Error(`${r.status}`);
+    const d=await r.json();
+
+    // Status pill
+    const pill=document.getElementById('statusPill');
+    pill.textContent=d.status==='running'?'LIVE':'OFFLINE';
+    pill.className='pill '+(d.status==='running'?'pill-live':'pill-off');
+
+    // Stats grid
+    const stats=[
+      {v:d.users,l:'Users',c:'s0'},
+      {v:d.claims,l:'Claims',c:'s1'},
+      {v:d.risks!==undefined?d.risks:d.risk_count||0,l:'Risks',c:'s2'},
+      {v:d.pending_repairs!==undefined?d.pending_repairs:d.repair_count||0,l:'Pending Repairs',c:'s3'},
+      {v:d.reports,l:'Reports',c:'s4'}
+    ];
+    sg.innerHTML=stats.map(s=>`<div class="stat-card ${s.c}"><div class="stat-num mono">${s.v}</div><div class="stat-label">${s.l}</div></div>`).join('');
+
+    // Claims list
+    const claims=d.recent_claims||[];
+    document.getElementById('claimCount').textContent=claims.length+' shown';
+    if(!claims.length)cl.innerHTML='<div class="empty">No claims yet. Run an audit.</div>';
+    else cl.innerHTML=claims.map(c=>`<div class="claim-row"><span class="claim-sev ${sevClass(c.severity||'low')}">${c.severity||'low'}</span><div class="claim-body"><div class="claim-title">${esc(c.title||c.claim||'Untitled')}</div><span class="claim-lens">${esc(c.audience_lens||'general')} · ${c.confidence_band||'—'}</span></div></div>`).join('');
+
+    // Repair queue
+    const repairs=d.repair_queue||[];
+    document.getElementById('repairCount').textContent=repairs.length+' queued';
+    if(!repairs.length)rl.innerHTML='<div class="empty">No repairs pending.</div>';
+    else rl.innerHTML=repairs.map(r=>`<div class="repair-row"><div class="repair-priority"><div class="repair-pnum mono">${(r.priority||0).toFixed(2)}</div><div class="repair-plabel">priority</div></div><div class="repair-body"><div class="repair-title">${esc(r.title||'Untitled')}</div><div class="repair-meta"><span>impact ${(r.impact||0).toFixed(1)}</span><span>effort ${(r.effort||0).toFixed(1)}</span><span>urgency ${(r.urgency||0).toFixed(1)}</span></div></div><span class="repair-status ${r.status==='completed'?'stat-done':'stat-pending'}">${r.status||'pending'}</span></div>`).join('');
+
+    // Footer
+    document.getElementById('footerVer').textContent='v'+(d.version||'0.0.0');
+    document.getElementById('footerRoutes').textContent=(d.routes||'—')+' routes';
+    document.getElementById('footerUptime').textContent=d.server_uptime||'—';
+  }catch(e){
+    const pill=document.getElementById('statusPill');
+    pill.textContent='OFFLINE';pill.className='pill pill-off';
+    sg.innerHTML='<div class="stat-card s0"><div class="stat-num">—</div><div class="stat-label">API offline</div></div>'.repeat(5);
+    cl.innerHTML='<div class="empty">Cannot reach backend at '+API+'</div>';
+    rl.innerHTML='<div class="empty">Cannot reach backend</div>';
+  }
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+
+load();
+setInterval(load,30000); // auto-refresh every 30s
+</script>
+</body>
+</html>

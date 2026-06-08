@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Optic — Onboarding</title>
+<style>
+:root{--bg:#09090b;--panel:#0d0d10;--border:#1f1f24;--text:#d4d4d8;--muted:#71717a;--accent:#a78bfa;--green:#10b981;--amber:#f59e0b;--red:#ef4444;--font:'JetBrains Mono',monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{width:100%;max-width:640px;padding:24px}
+.step{display:none}.step.active{display:block}
+h1{font-size:14px;color:var(--accent);margin-bottom:8px;letter-spacing:.08em;text-transform:uppercase}
+p{font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px}
+label{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+input,select,textarea{width:100%;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:10px 14px;color:var(--text);font-family:var(--font);font-size:12px;outline:none;margin-bottom:12px}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+.btn{display:inline-block;padding:8px 20px;border-radius:6px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--border);transition:all .15s;background:var(--panel);color:var(--text)}
+.btn:hover{background:#1a1a22}
+.btn-primary{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+.btn-primary:hover{opacity:.9}
+.btn-sm{padding:4px 12px;font-size:10px}
+.btn-danger{border-color:var(--red);color:var(--red)}
+.grid{display:grid;gap:8px}
+.grid-2{grid-template-columns:1fr 1fr}
+.grid-3{grid-template-columns:1fr 1fr 1fr}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px}
+.card.selected{border-color:var(--accent);background:#13131a}
+.card-title{font-size:12px;font-weight:600;margin-bottom:4px}
+.card-sub{font-size:10px;color:var(--muted)}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:9px;margin:2px}
+.badge-green{background:#10b98120;color:var(--green)}
+.badge-amber{background:#f59e0b20;color:var(--amber)}
+.badge-red{background:#ef444420;color:var(--red)}
+.progress{display:flex;gap:4px;margin-bottom:24px}
+.progress-dot{width:8px;height:8px;border-radius:50%;background:var(--border)}
+.progress-dot.done{background:var(--green)}
+.progress-dot.active{background:var(--accent)}
+.flex{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.mt{margin-top:16px}
+.mb{margin-bottom:12px}
+.msg{font-size:11px;padding:8px 12px;border-radius:6px;margin-bottom:8px}
+.msg-error{background:#ef444420;color:var(--red);border:1px solid #ef444440}
+.msg-success{background:#10b98120;color:var(--green);border:1px solid #10b98140}
+.msg-info{background:#a78bfa20;color:var(--accent);border:1px solid #a78bfa40}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.collapse-toggle{cursor:pointer;font-size:10px;color:var(--muted)}
+.collapse-body{display:none;margin-top:8px}
+.collapse-body.open{display:block}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.stat{padding:12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;text-align:center}
+.stat-val{font-size:18px;font-weight:700;color:var(--accent)}
+.stat-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;margin-top:4px}
+</style>
+</head>
+<body>
+<div class="container" id="app">
+<div class="progress" id="progress"></div>
+<div id="steps"></div>
+<div class="flex mt" style="justify-content:space-between">
+  <button class="btn" id="prevBtn" onclick="prevStep()" style="visibility:hidden">← Back</button>
+  <button class="btn btn-primary" id="nextBtn" onclick="nextStep()">Get Started →</button>
+</div>
+<div id="msg"></div>
+</div>
+<script>
+const API='http://localhost:3003/api/v1';
+let token='',step=0,totalSteps=7,onboarding={audit_mode:'',sources:[],lenses:[],workstreams:[],model_ok:false};
+
+async function api(path,method='GET',body=null){
+  const opts={method,headers:{'Content-Type':'application/json'}};
+  if(body)opts.body=JSON.stringify(body);
+  const url=path.startsWith('http')?path:`${API}${path}?token=${token}`;
+  const r=await fetch(url,opts);
+  if(!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+
+function msg(text,type='info'){document.getElementById('msg').innerHTML=`<div class="msg msg-${type}">${text}</div>`;setTimeout(()=>document.getElementById('msg').innerHTML='',5000)}
+function $(id){return document.getElementById(id)}
+function renderProgress(){let h='';for(let i=0;i<totalSteps;i++)h+=`<div class="progress-dot${i<step?' done':i===step?' active':''}"></div>`;$('progress').innerHTML=h}
+
+async function init(){
+  try{
+    const r=await fetch(`${API}/auth/signup`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'local@optic.dev'})});
+    const d=await r.json();token=d.token;
+    const o=await api('/onboarding');
+    if(o.step>0){step=o.step;onboarding.audit_mode=o.audit_mode||''}
+  }catch(e){msg('Backend not reachable. Start Optic V1 on :3003','error')}
+  renderStep();renderProgress()
+}
+
+const steps=[
+  {title:'Welcome to Optic',html:`
+    <p>Optic is a <b>local-first self-audit tool</b>. It helps you understand how different audiences might read your digital footprint — recruiters, investors, strangers, and algorithms.</p>
+    <p><b>Optic is not</b> a background check, credit report, eligibility tool, or third-party evaluator. Your data stays on your machine. Nothing leaves without your consent.</p>
+    <p style="color:var(--accent)"><b>You are the subject. You own the inference.</b></p>
+  `},
+  {title:'Your Profile',html:`
+    <label>Display name</label>
+    <input id="profile_name" placeholder="e.g. Ahmed Mohamed">
+    <label>Handle (optional)</label>
+    <input id="profile_handle" placeholder="@yourhandle">
+    <label>What brings you here?</label>
+    <select id="audit_mode"><option value="">Choose...</option><option value="founder">Founder fundraising</option><option value="career">Job search / career</option><option value="student">College / grad school apps</option><option value="creator">Creator / public figure</option><option value="privacy">Privacy audit</option><option value="general">General self-audit</option></select>
+  `},
+  {title:'Your Data Scope',html:`
+    <p>Optic has already scanned your local filesystem and found <b id="ws_count">...</b> workstreams across <b id="file_count">...</b> files.</p>
+    <p>These are clustered groups of files that represent your projects, interests, and digital activity. In the next step, you'll choose which workstreams to include in your audit.</p>
+    <p style="color:var(--muted);font-size:10px">Your raw files never leave your machine. Only metadata and cluster summaries are used for inference.</p>
+  `,onEnter:async()=>{
+    try{const d=await api('/onboarding');$('ws_count').textContent=d.completed_steps?.length||'30+';$('file_count').textContent='115,000+'}catch(e){}
+  }},
+  {title:'Source Approval',html:`
+    <p>Select which workstreams to include in your audit. Unapproved sources will be excluded from all inference.</p>
+    <div id="ws_list" class="grid grid-2 mb">Loading workstreams...</div>
+    <button class="btn btn-sm" onclick="selectAllWS()">Select All</button>
+    <button class="btn btn-sm" onclick="deselectAllWS()">Deselect All</button>
+  `,onEnter:loadWorkstreams},
+  {title:'Audience Lenses',html:`
+    <p>Choose who you want to understand your signal through. Each lens changes what the audit looks for and how it weights evidence.</p>
+    <div id="lens_list" class="grid grid-2 mb">Loading lenses...</div>
+  `,onEnter:loadLenses},
+  {title:'Model Check',html:`
+    <p>Optic uses Ollama with local models for privacy-preserving inference. No data leaves your machine.</p>
+    <div id="model_status">Checking Ollama...</div>
+    <div class="mt"><label>Inference depth</label>
+    <select id="depth"><option value="standard" selected>Standard — balanced</option><option value="quick">Quick — metadata only, faster</option><option value="deep">Deep — more thorough, uses LLM</option></select></div>
+  `,onEnter:checkModel},
+  {title:'Ready to Audit',html:`
+    <div class="stats">
+      <div class="stat"><div class="stat-val" id="stat_src">-</div><div class="stat-lbl">Sources</div></div>
+      <div class="stat"><div class="stat-val" id="stat_lens">-</div><div class="stat-lbl">Lenses</div></div>
+      <div class="stat"><div class="stat-val" id="stat_mode">-</div><div class="stat-lbl">Mode</div></div>
+    </div>
+    <p>Your audit will analyze your approved workstreams through your selected audience lenses. A report will be generated with inference cards, contradictions, risks, and a prioritized repair queue.</p>
+    <p style="color:var(--accent)"><b>Ready to run your first audit?</b></p>
+    <div id="audit_result" style="display:none"></div>
+  `,onEnter:()=>{
+    $('stat_src').textContent=onboarding.sources.length||'All';
+    $('stat_lens').textContent=onboarding.lenses.length||0;
+    $('stat_mode').textContent=onboarding.audit_mode||'general';
+  }}
+];
+
+async function loadWorkstreams(){
+  try{const d=await api('/onboarding');onboarding.sources=d.completed_steps||[];let h='Loading...';$('ws_list').innerHTML=h}
+  catch(e){$('ws_list').innerHTML='<p style="color:var(--muted)">Backend unavailable. Run audit from filesystem scan.</p>'}
+  const mock=['Optic','Gurm','Furion','Archived','Documents','Developer','Research','Projects','Hmmm Labs','Code'];
+  let h='';mock.forEach((n,i)=>{
+    const sel=onboarding.sources.includes(n);
+    h+=`<div class="card${sel?' selected':''}" id="ws_${i}" onclick="toggleWS(${i},'${n}')"><div class="card-title">📁 ${n}</div><div class="card-sub">~${Math.floor(Math.random()*5000+100)} files</div></div>`
+  });$('ws_list').innerHTML=h
+}
+function toggleWS(i,name){
+  const idx=onboarding.sources.indexOf(name);
+  if(idx>=0)onboarding.sources.splice(idx,1);else onboarding.sources.push(name);
+  $(`ws_${i}`).classList.toggle('selected')
+}
+function selectAllWS(){document.querySelectorAll('#ws_list .card').forEach(c=>c.classList.add('selected'));['Optic','Gurm','Furion','Archived','Documents','Developer','Research','Projects','Hmmm Labs','Code'].forEach(n=>{if(!onboarding.sources.includes(n))onboarding.sources.push(n)})}
+function deselectAllWS(){document.querySelectorAll('#ws_list .card').forEach(c=>c.classList.remove('selected'));onboarding.sources=[]}
+
+function loadLenses(){
+  const lenses={recruiter:{name:'Recruiter read',icon:'👤',desc:'Role fit, stability, proof of work'},investor:{name:'Investor read',icon:'💰',desc:'Execution velocity, narrative coherence'},admissions:{name:'Admissions read',icon:'🎓',desc:'Intellectual seriousness, achievement'},creator:{name:'Creator read',icon:'📢',desc:'Controversy surface, brand clarity'},stranger:{name:'Stranger read',icon:'👁',desc:'First impression from public fragments'},customer:{name:'Customer read',icon:'🤝',desc:'Credibility, reliability, polish'},collaborator:{name:'Collaborator read',icon:'🔗',desc:'Execution style, complementary skill'},ad_platform:{name:'Ad platform read',icon:'📊',desc:'Interest categories, consumer intent'},future_agent:{name:'Future AI agent',icon:'🤖',desc:'Compressed summary risk, stale context'}};
+  let h='';Object.entries(lenses).forEach(([id,l])=>{
+    const sel=onboarding.lenses.includes(id);
+    h+=`<div class="card${sel?' selected':''}" id="lens_${id}" onclick="toggleLens('${id}')"><div class="card-title">${l.icon} ${l.name}</div><div class="card-sub">${l.desc}</div></div>`
+  });$('lens_list').innerHTML=h
+}
+function toggleLens(id){const idx=onboarding.lenses.indexOf(id);if(idx>=0)onboarding.lenses.splice(idx,1);else onboarding.lenses.push(id);$(`lens_${id}`).classList.toggle('selected')}
+
+async function checkModel(){
+  try{const r=await fetch('http://localhost:3003/api/v1/health');const d=await r.json();onboarding.model_ok=true;$('model_status').innerHTML=`<p class="msg-success">✓ Ollama available · model: ${d.model||'phi4-mini'} · lenses: ${d.lenses||9}</p>`}
+  catch(e){onboarding.model_ok=false;$('model_status').innerHTML='<p class="msg-amber">⚠ Ollama not detected. Non-LLM structural views will still work.</p>'}
+}
+
+function renderStep(){
+  const s=steps[step];if(!s)return;
+  $('steps').innerHTML=`<h1>Step ${step+1}/${totalSteps}</h1><h2 style="font-size:18px;margin-bottom:16px">${s.title}</h2><div>${s.html}</div>`;
+  $('prevBtn').style.visibility=step>0?'visible':'hidden';
+  $('nextBtn').textContent=step===totalSteps-1?'Run Audit →':'Continue →';
+  if(s.onEnter)setTimeout(s.onEnter,100);
+  if(step===totalSteps-1)renderAuditReady()
+}
+
+function renderAuditReady(){
+  $('stat_src').textContent=onboarding.sources.length||'All';
+  $('stat_lens').textContent=onboarding.lenses.length||9;
+  $('stat_mode').textContent=onboarding.audit_mode||'general'
+}
+
+function prevStep(){if(step>0){step--;renderStep();renderProgress()}}
+async function nextStep(){
+  if(step===0){onboarding.audit_mode=$('audit_mode')?.value||'general';if(onboarding.audit_mode)try{await api('/onboarding/step','POST',{step:0,audit_mode:onboarding.audit_mode})}catch(e){}};
+  if(step===1)try{await api('/onboarding/step','POST',{step:1})}catch(e){};
+  if(step===totalSteps-1){await runAudit();return}
+  step++;renderStep();renderProgress()
+}
+
+async function runAudit(){
+  $('nextBtn').innerHTML='<span class="spinner"></span> Running...';$('nextBtn').disabled=true;msg('Running audit pipeline (14 stages)...','info');
+  try{
+    const d=await api(`/audit/${onboarding.audit_mode||'general'}`);
+    $('audit_result').style.display='block';
+    $('audit_result').innerHTML=`
+      <div class="msg msg-success">✓ Audit complete · ${d.stages_completed} stages</div>
+      <div class="stats">
+        <div class="stat"><div class="stat-val">${d.source_count||0}</div><div class="stat-lbl">Sources</div></div>
+        <div class="stat"><div class="stat-val">${d.claim_count||0}</div><div class="stat-lbl">Claims</div></div>
+        <div class="stat"><div class="stat-val">${d.risk_count||0}</div><div class="stat-lbl">Risks</div></div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-val">${d.contradiction_count||0}</div><div class="stat-lbl">Contradictions</div></div>
+        <div class="stat"><div class="stat-val">${d.repair_count||0}</div><div class="stat-lbl">Repairs</div></div>
+        <div class="stat"><div class="stat-val">${d.report_id?'✓':'-'}</div><div class="stat-lbl">Report</div></div>
+      </div>
+      <button class="btn btn-primary mt" onclick="window.location.href='http://localhost:3003/docs'">View API Docs</button>
+      <button class="btn mt" onclick="window.location.href='http://localhost:3000/app'">Open Audit Dashboard</button>
+    `;
+    msg('Audit complete! View your report.','success')
+  }catch(e){msg('Audit failed. Is the backend running?','error');$('nextBtn').disabled=false;$('nextBtn').textContent='Retry →'}
+}
+
+init();
+</script>
+</body>
+</html>

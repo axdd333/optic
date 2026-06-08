@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Optic — Onboarding</title>
+<style>
+:root{--bg:#f8f9fb;--card:#fff;--border:#e5e7eb;--text:#111;--muted:#6b7280;--accent:#7c3aed;--font:system-ui,-apple-system,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;display:flex;align-items:center;justify-content:center}
+.overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.8);backdrop-filter:blur(12px)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:40px;max-width:480px;width:90%;box-shadow:0 4px 32px rgba(0,0,0,.06)}
+.logo{font-size:24px;font-weight:700;color:var(--accent);margin-bottom:8px}
+h2{font-size:20px;margin-bottom:12px}
+p{color:var(--muted);line-height:1.6;margin-bottom:16px}
+.btn{background:var(--accent);color:#fff;border:none;padding:12px 32px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600}
+.btn:disabled{opacity:.3;cursor:not-allowed}
+.btn-ghost{background:transparent;color:var(--accent);border:1px solid var(--accent);margin-right:8px}
+.input{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:8px;font-size:14px;outline:none;margin-bottom:16px}
+.input:focus{border-color:var(--accent)}
+.tag{border:1px solid var(--border);border-radius:20px;padding:6px 14px;font-size:12px;cursor:pointer;background:#fff;transition:all .15s}
+.tag.selected{background:var(--accent);color:#fff;border-color:var(--accent)}
+.tag:hover:not(.selected){background:#f5f3ff}
+.tags{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.dots{display:flex;gap:4px;justify-content:center;margin-top:16px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--border)}
+.dot.active{background:var(--accent)}
+.dot.done{background:#10b981}
+.privacy{font-size:11px;color:var(--muted);margin-top:16px}
+.fade{animation:fadeIn .2s ease}@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div class="overlay" id="app">
+<div class="card fade" id="card"><div class="logo">Optic</div><h2>Understand your digital footprint</h2><p>Optic analyzes the files on your computer to reveal what humans and algorithms can infer about you — your identity, work, relationships, and behavior. Everything stays on-device.</p><p style="font-size:11px;color:#999">You are the subject. You own the inference.</p><button class="btn" onclick="go(1)">Get started</button></div>
+<div class="dots" id="dots"></div>
+</div>
+<script>
+var cur=0,total=4,profile={},selGoals=[];
+function dots(){var h='';for(var i=0;i<total;i++)h+='<div class="dot'+(i===step?' active':i<step?' done':'')+'"></div>';document.getElementById('dots').innerHTML=h}
+
+function go(s){
+  step=s;dots();var c=document.getElementById('card');c.classList.remove('fade');void c.offsetWidth;c.classList.add('fade');
+  if(s===0){c.innerHTML='<div class=logo>Optic</div><h2>Understand your digital footprint</h2><p>Optic analyzes the files on your computer to reveal what humans and algorithms can infer about you — your identity, work, relationships, and behavior. Everything stays on-device.</p><p style=font-size:11px;color:#999>You are the subject. You own the inference.</p><button class=btn onclick=go(1)>Get started</button>'}
+  else if(s===1){c.innerHTML='<div class=logo>Optic</div><h2>Your privacy matters</h2><p>Optic runs entirely on your Mac. Your data never leaves your device. Nothing is uploaded, shared, or sold.</p><div style=margin:16px 0><label style=display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer><input type=checkbox id=pc onchange="document.getElementById(\\'pb\\').disabled=!this.checked"> I understand. Optic analyzes my files locally.</label></div><div style=display:flex><button class="btn btn-ghost" onclick=go(0)>Back</button><button class=btn id=pb disabled onclick=go(2)>Continue</button></div>'}
+  else if(s===2){c.innerHTML='<div class=logo>Optic</div><h2>What should we call you?</h2><p>This stays local. It helps personalize your audit experience.</p><input class=input id=n placeholder="Your name" autofocus onkeydown="if(event.key===\'Enter\'){var v=document.getElementById(\'n\').value;if(v.trim()){profile.name=v;go(3)}}"><div style=display:flex><button class="btn btn-ghost" onclick=go(1)>Back</button><button class=btn onclick="var v=document.getElementById(\'n\').value;if(v.trim()){profile.name=v;go(3)}">Continue</button></div>'}
+  else if(s===3){var goals=['Founder fundraising','Job search','College apps','Creator growth','Privacy audit','Just curious'];c.innerHTML='<div class=logo>Optic</div><h2>What brings you here?</h2><p>This helps Optic focus on what matters to you.</p><div class=tags id=gs>'+goals.map(function(g){return '<button class=tag onclick="var b=this;b.classList.toggle(\'selected\');var t=document.querySelectorAll(\'#gs .tag.selected\');selGoals=Array.from(t).map(function(x){return x.textContent});document.getElementById(\'gb\').disabled=selGoals.length===0">'+g+'</button>'}).join('')+'</div><div style=display:flex><button class="btn btn-ghost" onclick=go(2)>Back</button><button class=btn id=gb disabled onclick="profile.goals=selGoals;go(4)">Continue</button></div>'}
+  else{var auditUrl='http://localhost:3003/api/v1/audit/general';c.innerHTML='<div class=logo>Optic</div><h2>Ready to begin</h2><div style="margin:16px 0;padding:12px;background:#f5f3ff;border-radius:8px;font-size:13px"><b>'+profile.name+'</b><br>'+selGoals.join(', ')+'</div><p>Your audit will analyze workstreams from your local filesystem through multiple audience lenses.</p><button class=btn onclick="var b=this;b.textContent=\'Running...\';b.disabled=true;fetch(\'http://localhost:3003/api/v1/auth/signup\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({email:profile.name.toLowerCase().replace(/ /g,\'\')+\'@optic.local\'})}).then(function(r){return r.json()}).then(function(d){return fetch(auditUrl+\'?token=\'+d.token)}).then(function(r){return r.json()}).then(function(d){window.location=\'http://localhost:3003/\'}).catch(function(){b.textContent=\'Retry\';b.disabled=false})">Run Audit →</button>'}
+}
+go(0);
+</script>
+</body>
+</html>
