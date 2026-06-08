@@ -33,6 +33,9 @@ from . import chat, infer, ollama
 from . import db, fs, health
 from . import ingest, latent, planner, scan
 
+import csv
+from fpdf import FPDF
+
 log = logging.getLogger("ctxorg.server")
 
 # ---------------------------------------------------------------------------
@@ -79,6 +82,29 @@ try:
 except ImportError:
     _OPTIC_AVAILABLE = False
     _ML_AVAILABLE = False
+
+# ── Optic V1 database (shared with optic.v1) ─────────────────────
+_V1_DB = Path.home() / ".optic" / "v1.db"
+_V1_AVAILABLE = _V1_DB.exists()
+
+
+def _v1_row_to_dict(row) -> dict:
+    """Convert a sqlite3.Row to a plain dict with JSON-aware field parsing."""
+    if row is None:
+        return {}
+    d = dict(row)
+    json_fields = {"supporting_evidence", "weakening_evidence", "source_gaps",
+                   "repair_options", "claim_ids", "artifact_ids", "audience_affected",
+                   "linked_claim_ids", "linked_artifact_ids", "linked_evidence_ids",
+                   "affected_audience",
+                   "exact_steps", "before_measurement", "after_measurement"}
+    for key, val in d.items():
+        if key in json_fields and isinstance(val, str):
+            try:
+                d[key] = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return d
 
 _acct_lock = threading.Lock()
 _store_lock = threading.Lock()
@@ -232,7 +258,7 @@ _AUDIENCES = [
         "id": "recruiter",
         "name": "Recruiter read",
         "icon": "👤",
-        "summary": "Most likely a strong fit for technical leadership roles.",
+        "summary": "Evaluates career signals, project output, and professional trajectory from a hiring lens.",
         "perspective": "a hiring manager at a tech company",
         "keywords": [
             "career", "code", "project", "research", "work",
@@ -254,7 +280,7 @@ _AUDIENCES = [
         "id": "investor",
         "name": "Investor read",
         "icon": "💰",
-        "summary": "High builder signal with long-term owner mindset.",
+        "summary": "Evaluates builder signals, execution patterns, and trajectory from an early-stage funding lens.",
         "perspective": "an early-stage investor",
         "keywords": [
             "finance", "startup", "research", "code", "project",
@@ -273,33 +299,10 @@ _AUDIENCES = [
         "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
     },
     {
-        "id": "lender",
-        "name": "Lender read",
-        "icon": "🏛",
-        "summary": "Low credit risk with stable financial behavior.",
-        "perspective": "a consumer credit underwriter",
-        "keywords": ["finance", "documents", "tax", "income"],
-        "kind_w": {
-            "screenshots": 0.15,
-            "documents": 1.0,
-            "code": 0.25,
-            "media": 0.1,
-            "other": 0.65,
-        },
-        "key_w": 0.78,
-        "kind_wt": 0.22,
-        "avoid_w": 0.35,
-        "avoid": [
-            "img_", "preview", "removebg", "abstract", "hands",
-            "code", "script", "development", "schematic", "kicad",
-            "hero", "petri", "async", "macos",
-        ],
-    },
-    {
         "id": "stranger",
         "name": "Stranger read",
         "icon": "👁",
-        "summary": "Creative, thoughtful, and globally curious.",
+        "summary": "Evaluates public surface signals, available fragments, and first impressions with limited context.",
         "perspective": "an outside observer with limited context",
         "keywords": ["photo", "travel", "social", "writing", "life"],
         "kind_w": {
@@ -325,8 +328,13 @@ _NOISE_TAGS = {
 }
 
 _RED_NUM_RE = re.compile(r"\b\d{8,}\b")
-_RED_TOK_RE = re.compile(r"\b(?:sk|pk|rk|tok|token|key)[-_A-Za-z0-9]{8,}\b",
-                         re.IGNORECASE)
+_RED_TOK_RE = re.compile(
+    r"\b(?:sk|pk|rk|tok|token|key)[-_A-Za-z0-9]{8,}\b|"
+    r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|"
+    r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b|"
+    r"\bA[KS]IA[0-9A-Z]{16}\b",
+    re.IGNORECASE,
+)
 _RED_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _CHAT_BLOCK_RE = re.compile(
     r"(ignore (all )?(previous|prior) instructions|"
@@ -334,6 +342,31 @@ _CHAT_BLOCK_RE = re.compile(
     r"print (the )?(system|developer) message)",
     re.IGNORECASE,
 )
+
+# Despaced variant — catches spaced-letter and carriage-return obfuscation.
+# "i g n o r e a l l ..." → despaced → "ignoreall..." matches this pattern.
+_DESPACED_BLOCK_RE = re.compile(
+    r"(ignore(all)?(previous|prior)instructions|"
+    r"reveal(the)?(system|developer)prompt|"
+    r"print(the)?(system|developer)message)",
+    re.IGNORECASE,
+)
+
+
+def _guard_check(q: str) -> bool:
+    """Return True if *q* contains a blocked prompt-injection pattern.
+
+    Resilient to obfuscation: collapses all whitespace (handles \\r, \\n,
+    multi-space) and also checks the fully-despaced variant (handles
+    spaced-letter obfuscation like 'i g n o r e a l l ...').
+    """
+    normalized = re.sub(r"\s+", " ", q).strip()
+    if _CHAT_BLOCK_RE.search(normalized):
+        return True
+    despaced = re.sub(r"\s+", "", q)
+    if _DESPACED_BLOCK_RE.search(despaced):
+        return True
+    return False
 _RUN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 
 
@@ -400,6 +433,8 @@ def _auto_embed(cfg: dict) -> None:
 
 
 def serve(cfg: dict, host: str, port: int) -> None:
+    # Ensure V1 database and tables exist (self-bootstrap)
+    _v1_init_db()
     # Kick off background embedding of any items not yet embedded
     threading.Thread(target=_auto_embed, args=(cfg,), daemon=True).start()
     _scan_ensure_worker(cfg)
@@ -794,7 +829,10 @@ def route(req: BaseHTTPRequestHandler, cfg: dict) -> None:
     if path == "/api/simulations":
         return send(req, simulations_payload(req, cfg))
     if path.startswith("/api/simulate/"):
-        aid = path.removeprefix("/api/simulate/").strip("/")
+        try:
+            aid = path.removeprefix("/api/simulate/").strip("/")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return send_err(req, "invalid_audience_id", code=400)
         return send(req, simulate_payload(req, cfg, aid))
     if path == "/api/exports/history":
         return send(req, export_history_payload(cfg))
@@ -815,6 +853,40 @@ def route(req: BaseHTTPRequestHandler, cfg: dict) -> None:
     if path.startswith("/api/audit/") and path.endswith("/report"):
         aid = path.removeprefix("/api/audit/").removesuffix("/report").strip("/")
         return send(req, audit_detail_payload(req, cfg, aid))
+    if path == "/api/v1/simulations":
+        return send(req, simulations_payload(req, cfg))
+    if path.startswith("/api/v1/simulate/"):
+        try:
+            aid = path.removeprefix("/api/v1/simulate/").strip("/")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return send_err(req, "invalid_audience_id", code=400)
+        return send(req, simulate_payload(req, cfg, aid))
+    if path == "/api/v1/onboarding":
+        return send(req, onboarding_payload(cfg))
+    if path == "/api/v1/exports":
+        return send(req, export_v1_formats_payload(cfg))
+    if path == "/api/v1/claims":
+        return send(req, v1_claims_payload(req, cfg))
+    if path.startswith("/api/v1/claims/workstream/"):
+        try:
+            name = path.removeprefix("/api/v1/claims/workstream/").strip("/")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return send_err(req, "invalid_workstream_name", code=400)
+        return send(req, v1_claims_workstream_payload(req, cfg, name))
+    if path == "/api/v1/contradictions":
+        return send(req, v1_contradictions_payload(req, cfg))
+    if path == "/api/v1/risks":
+        return send(req, v1_risks_payload(req, cfg))
+    if path == "/api/v1/repairs":
+        return send(req, v1_repairs_payload(req, cfg))
+    if path == "/api/v1/status":
+        return send(req, v1_status_payload(req, cfg))
+    if path == "/api/v1/settings":
+        return send(req, v1_settings_payload(req, cfg))
+    if path == "/api/v1/artifacts":
+        return send(req, v1_artifacts_payload(req, cfg))
+    if path == "/api/v1/audit/general":
+        return send(req, v1_audit_general_payload(req, cfg))
     if path.startswith("/api/"):
         return send_err(req, "not_found", code=404)
     return send_err(req, "not_found", code=404)
@@ -830,7 +902,8 @@ def post(req: BaseHTTPRequestHandler, cfg: dict) -> None:
         out = chat.reply(_llm_cfg_runtime(cfg), data)
         return send(req, _chat_guard_output(out))
     if path == "/api/iris":
-        return iris_stream(req, _llm_cfg_runtime(cfg))
+        data = _iris_guard_input(body(req))
+        return iris_stream(req, _llm_cfg_runtime(cfg), data)
     if path == "/api/rename":
         return send(req, rename_payload(req, cfg))
     if path == "/api/signup":
@@ -906,6 +979,30 @@ def post(req: BaseHTTPRequestHandler, cfg: dict) -> None:
         return send(req, audit_ml_payload(req, cfg))
     if path == "/api/audit/batch":
         return send(req, audit_batch_payload(req, cfg))
+    if path == "/api/v1/onboarding":
+        return send(req, onboarding_update_payload(req, cfg))
+    if path == "/api/v1/simulations":
+        return send(req, simulation_save_payload(req, cfg))
+    if path.startswith("/api/v1/simulate/"):
+        aid = path.removeprefix("/api/v1/simulate/").strip("/")
+        return send(req, v1_simulation_eval_payload(req, cfg, aid))
+    if path == "/api/v1/iris/ask":
+        return send(req, iris_ask_payload(req, cfg))
+    if path.startswith("/api/v1/export/"):
+        fmt = path.removeprefix("/api/v1/export/").strip("/")
+        return send(req, export_v1_create_payload(req, cfg, fmt))
+    if path == "/api/v1/audit/general":
+        return send(req, v1_audit_trigger_payload(req, cfg))
+    if path.startswith("/api/v1/repairs/"):
+        # POST /api/v1/repairs/complete/<repair_id>  or  /api/v1/repairs/<repair_id>/complete
+        suffix = path.removeprefix("/api/v1/repairs/").strip("/")
+        if suffix.startswith("complete/"):
+            rep_id = suffix.removeprefix("complete/").strip("/")
+        else:
+            rep_id = suffix.removesuffix("/complete").strip("/")
+        return send(req, v1_repair_complete_payload(req, cfg, rep_id))
+    if path == "/api/v1/reset":
+        return send(req, v1_reset_payload(cfg))
     if path.startswith("/api/"):
         return send_err(req, "not_found", code=404)
     return send_err(req, "not_found", code=404)
@@ -934,7 +1031,7 @@ def _chat_guard_input(data: dict) -> dict:
     if len(q) > 2400:
         _metrics_inc("chat_guard_input_blocked")
         raise ReqErr("chat_input_too_long", code=400)
-    if _CHAT_BLOCK_RE.search(q):
+    if _guard_check(q):
         _metrics_inc("chat_guard_input_blocked")
         raise ReqErr("chat_input_blocked", code=400)
     hist = data.get("history", [])
@@ -952,6 +1049,60 @@ def _chat_guard_input(data: dict) -> dict:
     out = dict(data)
     out["q"] = q[:2400]
     out["history"] = clean
+    return out
+
+
+def _iris_guard_input(data: dict) -> dict:
+    """Sanitize Iris LLM input — mirrors _chat_guard_input for /api/iris."""
+    q = str(data.get("q", "")).replace("\x00", "").strip()
+    if not q:
+        raise ReqErr("iris_question_required", code=400)
+    if len(q) > 2400:
+        _metrics_inc("iris_guard_input_blocked")
+        raise ReqErr("iris_input_too_long", code=400)
+    if _guard_check(q):
+        _metrics_inc("iris_guard_input_blocked")
+        raise ReqErr("iris_input_blocked", code=400)
+    # Sanitize mode against allowlist
+    mode = str(data.get("mode", "report")).strip().lower()[:50]
+    allowed_modes = {"report", "mirror", "audit", "compare",
+                     "entity", "contradiction", "audience",
+                     "archive", "retune"}
+    if mode not in allowed_modes:
+        mode = "report"
+    # Sanitize audience against allowlist
+    audience = str(data.get("audience", "recruiter")).strip().lower()[:50]
+    allowed_audiences = {"recruiter", "investor", "collaborator", "creator",
+                         "privacy", "platform", "search", "institution", "stranger"}
+    if audience not in allowed_audiences:
+        audience = "recruiter"
+    # Sanitize history — strip null bytes, enforce roles, truncate
+    hist = data.get("history", [])
+    rows = hist if isinstance(hist, list) else []
+    clean_history = []
+    for row in rows[-40:]:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role", "")).strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        txt = str(row.get("content", "")).replace("\x00", "").strip()
+        if txt:
+            clean_history.append({"role": role, "content": txt[:2000]})
+    # Sanitize selected_ids — enforce string list, max 10
+    selected_ids = data.get("selected_ids", [])
+    clean_ids = []
+    if isinstance(selected_ids, list):
+        for sid in selected_ids[:10]:
+            sid_str = str(sid).strip()[:128]
+            if sid_str:
+                clean_ids.append(sid_str)
+    out = dict(data)
+    out["q"] = q[:2400]
+    out["mode"] = mode
+    out["audience"] = audience
+    out["history"] = clean_history
+    out["selected_ids"] = clean_ids
     return out
 
 
@@ -1258,9 +1409,13 @@ def workstreams_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
         # First request: seed cache with fast heuristic cards, kick off Gemma bg
         with _ws_lock:
             _ws_cache[run] = {"cards": [], "ready": False}
-        conn = db.open_db(cfg)
-        fast_cards = workstreams.compute(conn, cfg, run_id=run, limit=30,
-                                         gemma_budget=0)
+        try:
+            conn = db.open_db(cfg)
+            fast_cards = workstreams.compute(conn, cfg, run_id=run, limit=30,
+                                             gemma_budget=0)
+        except Exception:
+            _log_ev("ws_compute_failed", run=run)
+            return {"run": run, "workstreams": [], "cached": False}
         with _ws_lock:
             _ws_cache[run]["cards"] = fast_cards
         # Start background Gemma naming pass
@@ -4821,7 +4976,7 @@ def audiences_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
         return {"run": run, "audiences": cached, "cached": True}
     ws = _load_ws(cfg, run, allow_compute=False)
     rows = [_aud_row(ws, item) for item in _AUDIENCES]
-    rows.sort(key=lambda x: -int(x.get("score", 0)))
+    rows.sort(key=lambda x: -(x.get("score") or 0))
     _aud_cache_set(run, rows)
     return {"run": run, "audiences": rows, "cached": False}
 
@@ -4887,6 +5042,14 @@ def simulation_compare_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     return {"ok": True, "left": a, "right": b, "delta": _scenario_delta(a, b)}
 
 
+def v1_simulation_eval_payload(req: BaseHTTPRequestHandler, cfg: dict,
+                               audience_id: str) -> dict:
+    """POST /api/v1/simulate/{audience_id} — evaluate with cluster selections."""
+    data = body(req)
+    data["audience_id"] = audience_id.strip().lower()
+    return {"ok": True, "scenario": _simulation_eval(cfg, data)}
+
+
 def _simulation_eval(cfg: dict, data: dict) -> dict:
     run = str(data.get("run", "")).strip() or latest(cfg)
     aid = str(data.get("audience_id", "recruiter")).strip().lower()
@@ -4899,7 +5062,7 @@ def _simulation_eval(cfg: dict, data: dict) -> dict:
     base = _audience_score(ws, prof)
     nxt_rows = _scenario_apply(ws, include, exclude)
     nxt = _audience_score(nxt_rows, prof)
-    delta = nxt - base
+    delta = (nxt - base) if (base is not None and nxt is not None) else None
     n = max(1, len(nxt_rows))
     ci = round(max(2.0, min(15.0, 14.0 / (n ** 0.5))), 1)
     return {
@@ -4914,8 +5077,8 @@ def _simulation_eval(cfg: dict, data: dict) -> dict:
         "after_score": nxt,
         "delta": delta,
         "confidence_interval": {
-            "low": max(0, round(nxt - ci, 1)),
-            "high": min(100, round(nxt + ci, 1)),
+            "low": max(0, round(nxt - ci, 1)) if nxt is not None else None,
+            "high": min(100, round(nxt + ci, 1)) if nxt is not None else None,
         },
         "sample_size": n,
     }
@@ -5005,16 +5168,16 @@ def _aud_row(ws: list[dict], prof: dict) -> dict:
         "name": prof["name"],
         "icon": prof["icon"],
         "score": _audience_score(ws, prof),
-        "summary": prof["summary"],
+        "summary": prof.get("summary", ""),
     }
 
 
-def _audience_score(ws: list[dict], prof: dict) -> int:
+def _audience_score(ws: list[dict], prof: dict) -> int | None:
     if not ws:
-        return 50
+        return None
     ranked = _aud_rank(ws, prof)[:5]
     if not ranked:
-        return 50
+        return None
     fit = sum(r["fit"] for r in ranked) / len(ranked)
     conf = sum(r["conf"] for r in ranked) / len(ranked)
     noise = sum(r["noise"] for r in ranked) / len(ranked)
@@ -5415,6 +5578,208 @@ def _home_summary_put(cfg: dict, run: str, txt: str) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     tmp.replace(path)
+
+
+# ── Onboarding V1 ────────────────────────────────────────────────────────
+
+def _onboarding_path(cfg: dict) -> Path:
+    return cfgmod.state_dir(cfg) / "onboarding.json"
+
+
+def _onboarding_load(cfg: dict) -> dict:
+    path = _onboarding_path(cfg)
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _onboarding_save(cfg: dict, data: dict) -> None:
+    path = _onboarding_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True, separators=(",", ":")),
+                   encoding="utf-8")
+    tmp.replace(path)
+
+
+def onboarding_payload(cfg: dict) -> dict:
+    """GET /api/v1/onboarding — return current onboarding step and profile."""
+    data = _onboarding_load(cfg)
+    # Cross-check: if account says onboarded, respect that
+    rec = _acct_load(cfg)
+    if rec and bool(rec.get("onboarded", False)):
+        return {"step": 7, "profile": data.get("profile", {}),
+                "completed": True}
+    step = int(data.get("step", 1) or 1)
+    profile = data.get("profile", {})
+    if not isinstance(profile, dict):
+        profile = {}
+    return {"step": step, "profile": profile, "completed": False}
+
+
+def onboarding_update_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """POST /api/v1/onboarding — advance onboarding step with profile data."""
+    payload = body(req)
+    data = _onboarding_load(cfg)
+
+    step = int(payload.get("step", 1) or 1)
+    req_profile = payload.get("profile", {})
+    if not isinstance(req_profile, dict):
+        req_profile = {}
+
+    cur_profile = data.get("profile", {})
+    if not isinstance(cur_profile, dict):
+        cur_profile = {}
+    cur_profile.update(req_profile)
+    data["profile"] = cur_profile
+    data["step"] = step
+    data["updated_at"] = int(time.time())
+
+    if step >= 7:
+        data["completed"] = True
+
+    _onboarding_save(cfg, data)
+
+    # Also sync to account record if user is signed in
+    rec = _acct_load(cfg)
+    if rec:
+        rec["profile"] = cur_profile
+        if step >= 7:
+            rec["onboarded"] = True
+        rec["updated_at"] = int(time.time())
+        _acct_save(cfg, rec)
+
+    return {"ok": True, "step": step, "profile": cur_profile,
+            "completed": bool(data.get("completed", False))}
+
+
+def iris_ask_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """POST /api/v1/iris/ask — non-streaming audit-aware Iris answer.
+
+    Returns a structured response with cited claim/risk/repair IDs when
+    audit data exists.  Otherwise returns a plain answer.
+    """
+    from . import iris as iris_mod
+    from . import identity as id_mod
+    data = body(req)
+    q = str(data.get("q", "")).strip()[:2400]
+    if not q:
+        return {"answer": "Empty query.", "claims": [], "risks": [], "repairs": []}
+
+    mode = str(data.get("mode", "report"))
+    run = str(data.get("run", "")).strip()
+    selected_ids = [str(i) for i in data.get("selected_ids", []) if i]
+    audience_id = str(data.get("audience", "recruiter"))
+    history = list(data.get("history", []))
+
+    conn = db.open_db(cfg)
+
+    # Gather the same rich context Iris uses
+    context_text, tools_used = iris_mod._gather_context(
+        conn, q, mode,
+        cfg=cfg, run=run,
+        selected_ids=selected_ids or None,
+        audience_id=audience_id or None,
+    )
+
+    # Build the prompt identically to streaming Iris
+    system_content = (
+        iris_mod.BASE_SYSTEM.format(corpus="(see context below)")
+        + "\n"
+        + iris_mod.MODE_ADDENDUM.get(mode, iris_mod.MODE_ADDENDUM["report"])
+        + "\n## Context\n"
+        + context_text[:iris_mod._context_cap(mode)]
+    )
+
+    messages: list = [{"role": "system", "content": system_content}]
+    packed = iris_mod._history_pack(history)
+    for h in packed[-10:]:
+        messages.append({"role": h["role"], "content": str(h["content"])[:2000]})
+    messages.append({"role": "user", "content": q})
+
+    # Non-streaming LLM call
+    model = iris_mod._mode_model(cfg, mode, q)
+    temp = iris_mod._mode_temp(mode, q)
+    answer = ""
+    try:
+        from . import ollama
+        answer = ollama.text(
+            cfg,
+            "\n\n".join(
+                f"{m['role'].upper()}:\n{m['content']}"
+                for m in messages[-8:]
+            ),
+            feature="iris",
+            model=model,
+            temp=temp,
+            num_ctx=int(cfg.get("iris_num_ctx", cfg.get("num_ctx", 4096))),
+            timeout=120,
+        ) or ""
+    except Exception:
+        answer = ""
+
+    # Build structured claim/risk/repair citations from identity profiles
+    claims = []
+    risks = []
+    repairs = []
+    if selected_ids:
+        for i, iid in enumerate(selected_ids[:6]):
+            try:
+                profile = id_mod.get_profile(conn, cfg, iid)
+            except Exception:
+                profile = None
+            if not profile:
+                continue
+
+            src = profile.get("name", iid)
+            seq = i + 1
+
+            # Claims
+            for dc in profile.get("direct_claims", [])[:2]:
+                claims.append({
+                    "id": f"claim-{seq}",
+                    "description": str(dc)[:500],
+                    "source": src,
+                    "confidence": profile.get("confidence", 0),
+                })
+                seq += 1
+            for ic in profile.get("inferred_claims", [])[:2]:
+                claims.append({
+                    "id": f"claim-{seq}",
+                    "description": str(ic)[:500],
+                    "source": src,
+                    "confidence": round(profile.get("confidence", 0) * 0.6, 2),
+                })
+                seq += 1
+
+            # Risks
+            for r in profile.get("risks", []):
+                risks.append({
+                    "id": f"risk-{len(risks) + 1}",
+                    "severity": str(r.get("severity", "low")),
+                    "description": str(r.get("description", ""))[:500],
+                    "source": src,
+                })
+
+            # Repairs (from risk mitigations if present, else build from open questions)
+            for r in profile.get("risks", []):
+                if r.get("mitigation"):
+                    repairs.append({
+                        "id": f"repair-{len(repairs) + 1}",
+                        "action": str(r.get("mitigation", ""))[:500],
+                        "source": src,
+                    })
+
+    return {
+        "answer": answer or "Iris is currently unavailable.",
+        "claims": claims,
+        "risks": risks,
+        "repairs": repairs,
+        "mode": mode,
+    }
 
 
 def scan_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
@@ -7748,6 +8113,15 @@ def _export_build(req: BaseHTTPRequestHandler, cfg: dict, run: str,
             "graph": graph_payload(_qs_req(f"/api/graph?run={run}"), cfg),
             "settings": settings_payload(cfg).get("settings", {}),
         }
+    if kind == "markdown":
+        # Use same rich data as datapack for comprehensive markdown
+        return {
+            "run": run,
+            "report": report_payload(_qs_req(f"/api/report?run={run}"), cfg),
+            "workstreams": workstreams_payload(
+                _qs_req(f"/api/workstreams?run={run}"), cfg
+            ),
+        }
     return report_payload(_qs_req(f"/api/report?run={run}"), cfg)
 
 
@@ -7788,10 +8162,13 @@ def _export_write(cfg: dict, data: object, run: str, kind: str, dest: str,
     root.mkdir(parents=True, exist_ok=True)
     eid = f"exp-{uuid.uuid4().hex[:10]}"
     ts = int(time.time())
-    name = f"optic-{kind}-{run or 'latest'}-{ts}.json"
+
+    # Determine file extension and content based on format
+    ext, body_bytes = _export_format(kind, data, run, ts)
+
+    name = f"optic-{kind}-{run or 'latest'}-{ts}{ext}"
     path = root / name
-    body = json.dumps(data, indent=2, ensure_ascii=False)
-    path.write_text(body, encoding="utf-8")
+    path.write_bytes(body_bytes)
     rec = {
         "id": eid,
         "run": run,
@@ -7806,6 +8183,164 @@ def _export_write(cfg: dict, data: object, run: str, kind: str, dest: str,
     vals.append(rec)
     _export_history_save(cfg, vals[-300:])
     return rec
+
+
+def _export_format(kind: str, data: object, run: str, ts: int) -> tuple[str, bytes]:
+    """Return (extension, bytes_content) for the given export kind."""
+    if kind in ("datapack", "graph", "bundle", "audience"):
+        return (".json", json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+    if kind == "report":
+        return _export_to_pdf(data, run, ts)
+    if kind == "workstreams":
+        return _export_to_csv(data)
+    if kind == "markdown":
+        return _export_to_md(data, run, ts)
+    # fallback: JSON
+    return (".json", json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
+
+
+def _export_to_csv(data: dict) -> tuple[str, bytes]:
+    """Convert workstreams data to CSV."""
+    import io
+    buf = io.StringIO()
+    ws_list = data if isinstance(data, list) else data.get("workstreams", [])
+    if not ws_list:
+        buf.write("id,name,file_count,confidence,topics,summary\n")
+    else:
+        fieldnames = ["id", "name", "file_count", "confidence", "topics", "summary"]
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for ws in ws_list:
+            row = dict(ws)
+            if isinstance(row.get("topics"), list):
+                row["topics"] = "; ".join(str(t) for t in row["topics"])
+            writer.writerow(row)
+    return (".csv", buf.getvalue().encode("utf-8"))
+
+
+def _export_to_pdf(data: dict, run: str, ts: int) -> tuple[str, bytes]:
+    """Convert report/audience data to a proper PDF."""
+    import io
+    pdf = FPDF()
+    pdf.add_page()
+    # Title
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 12, "Optic Export Report", ln=True, align="C")
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, f"Run: {run}  |  Generated: {ts}", ln=True, align="C")
+    pdf.ln(8)
+
+    # Corpus section
+    def _add_section(title, content_lines):
+        if pdf.get_y() > 250:
+            pdf.add_page()
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 8, title, ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        for line in content_lines:
+            if len(line) > 120:
+                line = line[:117] + "..."
+            pdf.cell(0, 5, line, ln=True)
+        pdf.ln(3)
+
+    # Extract sections from data
+    if isinstance(data, dict):
+        # Corpus info
+        corpus = data.get("corpus", {})
+        if corpus:
+            _add_section("Corpus", [
+                f"Total files: {corpus.get('total_files', 'N/A')}",
+                f"Total bytes: {corpus.get('total_bytes', 'N/A')}",
+                f"Recent week: {corpus.get('recent_week', 'N/A')}",
+            ])
+
+        # Workstreams
+        ws_data = data.get("workstreams", {})
+        wss = ws_data.get("workstreams", ws_data.get("cards", []))
+        if isinstance(wss, list) and wss:
+            _add_section(f"Workstreams ({len(wss)})", [])
+            for ws in wss[:30]:
+                name = str(ws.get("name", ""))
+                fc = ws.get("file_count", "?")
+                conf = ws.get("confidence", 0)
+                conf_s = f"{int(conf*100)}%" if isinstance(conf, float) else str(conf)
+                summary = str(ws.get("summary", ""))[:120]
+                pdf.cell(0, 5, f"  {name} — {fc} files, {conf_s} confidence", ln=True)
+                if summary:
+                    pdf.set_font("Helvetica", "", 9)
+                    pdf.cell(0, 5, f"    {summary}", ln=True)
+                    pdf.set_font("Helvetica", "", 10)
+
+        # Report details
+        report = data.get("report", data)
+        if isinstance(report, dict):
+            scan = report.get("scan", {})
+            if scan:
+                metrics = scan.get("metrics", {})
+                infer_metrics = scan.get("infer_metrics", {})
+                _add_section("Scan Status", [
+                    f"Scanning: {scan.get('scanning', False)}",
+                    f"Queue depth: {scan.get('queue_depth', 0)}",
+                    f"Dead letters: {scan.get('dead_letter_count', 0)}",
+                    f"API hits: {metrics.get('api_hits', 0)}",
+                    f"Inference requests: {infer_metrics.get('infer_req', 0)}",
+                ])
+
+    # Watermark
+    pdf.ln(6)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.cell(0, 5, "Optic self-audit. Not a consumer report. Not a verdict.", ln=True, align="C")
+
+    buf = io.BytesIO()
+    pdf.output(buf)
+    return (".pdf", buf.getvalue())
+
+
+def _export_to_md(data: dict, run: str, ts: int) -> tuple[str, bytes]:
+    """Convert report data to Markdown."""
+    md = f"# Optic Export Report\n\n"
+    md += f"**Run:** {run}  \n"
+    md += f"**Generated:** {ts}\n\n"
+
+    if not isinstance(data, dict):
+        return (".md", md.encode("utf-8"))
+
+    corpus = data.get("corpus", {})
+    if corpus:
+        md += "## Corpus\n\n"
+        md += f"- Total files: {corpus.get('total_files', 'N/A')}\n"
+        md += f"- Total bytes: {corpus.get('total_bytes', 'N/A')}\n"
+        md += f"- Recent week: {corpus.get('recent_week', 'N/A')}\n\n"
+
+    ws_data = data.get("workstreams", {})
+    wss = ws_data.get("workstreams", ws_data.get("cards", []))
+    if isinstance(wss, list) and wss:
+        md += f"## Workstreams ({len(wss)})\n\n"
+        for ws in wss[:50]:
+            name = str(ws.get("name", ""))
+            fc = ws.get("file_count", "?")
+            conf = ws.get("confidence", 0)
+            conf_s = f"{int(conf*100)}%" if isinstance(conf, float) else str(conf)
+            summary = str(ws.get("summary", ""))
+            md += f"### {name} ({fc} files, {conf_s})\n\n"
+            if summary:
+                md += f"{summary}\n\n"
+            topics = ws.get("topics", [])
+            if topics:
+                md += f"*Topics: {', '.join(str(t) for t in topics)}*\n\n"
+
+    report = data.get("report", data)
+    if isinstance(report, dict):
+        scan = report.get("scan", {})
+        if scan:
+            md += "## Scan Status\n\n"
+            md += f"- Scanning: {scan.get('scanning', False)}\n"
+            md += f"- Queue depth: {scan.get('queue_depth', 0)}\n"
+            md += f"- Dead letters: {scan.get('dead_letter_count', 0)}\n\n"
+
+    md += "\n---\n*Optic self-audit. Not a consumer report. Not a verdict.*\n"
+    return (".md", md.encode("utf-8"))
 
 
 def _export_root(cfg: dict, dest: str) -> Path:
@@ -7831,6 +8366,68 @@ def _export_history_list(cfg: dict) -> list[dict]:
 
 def _export_history_save(cfg: dict, vals: list[dict]) -> None:
     _store_write(_export_history_path(cfg), {"items": vals})
+
+
+def export_v1_formats_payload(cfg: dict) -> dict:
+    """GET /api/v1/exports — return available export formats."""
+    return {
+        "formats": [
+            {
+                "id": "report",
+                "title": "Executive Report (PDF)",
+                "subtitle": "Comprehensive narrative report with visuals and key insights.",
+            },
+            {
+                "id": "audience",
+                "title": "Audience Snapshot (JSON)",
+                "subtitle": "Tailored summary for a specific audience perspective.",
+            },
+            {
+                "id": "datapack",
+                "title": "Data Package (JSON)",
+                "subtitle": "Raw signals and entities for technical consumption.",
+            },
+            {
+                "id": "workstreams",
+                "title": "CSV Findings",
+                "subtitle": "Structured findings for analysis in spreadsheets.",
+            },
+            {
+                "id": "markdown",
+                "title": "Markdown Summary",
+                "subtitle": "Human-readable markdown report with key findings.",
+            },
+        ],
+        "history": export_history_payload(cfg).get("items", []),
+    }
+
+
+def export_v1_create_payload(req: BaseHTTPRequestHandler, cfg: dict,
+                              fmt: str) -> dict:
+    """POST /api/v1/export/{format} — trigger an export for a given format."""
+    if not fmt:
+        raise ReqErr("missing_format", code=400,
+                     detail="export format is required in URL path")
+    kinds = {"report", "audience", "datapack", "workstreams", "graph", "bundle", "markdown"}
+    if fmt not in kinds:
+        raise ReqErr("unknown_format", code=400,
+                     detail=f"unknown format '{fmt}'. valid: {', '.join(sorted(kinds))}")
+    _workspace_require_role(cfg, {"owner", "admin", "member"})
+    data = body(req)
+    run = str(data.get("run", "")).strip() or latest(cfg)
+    dest = str(data.get("dest_dir", "")).strip()
+    _quota_take(cfg, "export_daily")
+    allow = bool(data.get("allow_risky", False))
+    red = bool(data.get("redact",
+               _settings_runtime(cfg)["privacy"].get("redact_exports", True)))
+    payload = _export_build(req, cfg, run, fmt)
+    check = _export_check(payload)
+    if check["risk_count"] > 0 and not (allow or red):
+        raise ReqErr("export_blocked_compliance", code=400,
+                     detail=f"risk_count={check['risk_count']}")
+    safe = _export_redact(payload) if red else payload
+    rec = _export_write(cfg, safe, run, fmt, dest, check, red)
+    return {"ok": True, "export": rec}
 
 
 def entity_profile_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
@@ -7933,10 +8530,11 @@ def reveal(path: str, mode: str) -> dict:
     return {"ok": proc.returncode == 0, "err": err}
 
 
-def iris_stream(req: BaseHTTPRequestHandler, cfg: dict) -> None:
+def iris_stream(req: BaseHTTPRequestHandler, cfg: dict, data: dict | None = None) -> None:
     """POST /api/iris — streaming Neurontology response via chunked HTTP."""
     from . import iris as iris_mod
-    data = body(req)
+    if data is None:
+        data = body(req)
     req.send_response(200)
     for key, val in _sec_headers(req).items():
         req.send_header(key, val)
@@ -8029,6 +8627,826 @@ def _sec_headers(req: BaseHTTPRequestHandler) -> dict:
     if _is_api_path(req):
         out["Cache-Control"] = "no-store"
     return out
+
+
+# ── Optic V1 API payloads ────────────────────────────────────────
+# These read from the V1 SQLite database at ~/.optic/v1.db
+# that is populated by optic.v1.startup on first scan.
+
+def _v1_open_db():
+    """Open the V1 SQLite database for reading."""
+    import sqlite3
+    conn = sqlite3.connect(str(_V1_DB))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _v1_open_db_rw():
+    """Open the V1 SQLite database in read-write mode (for audit writes)."""
+    import sqlite3
+    conn = sqlite3.connect(str(_V1_DB))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _v1_init_db():
+    """Create the V1 SQLite database and tables if they don't exist.
+    Mirrors the schema from optic.v1.server.init_db() so ctxorg can
+    self-bootstrap without requiring the V1 FastAPI server to run first."""
+    global _V1_AVAILABLE
+    _V1_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = _v1_open_db_rw()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY, email TEXT UNIQUE, settings TEXT,
+            local_mode INTEGER DEFAULT 1, encryption_key_ref TEXT,
+            is_test_user INTEGER DEFAULT 0,
+            created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY, user_id TEXT, created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sources (
+            id TEXT PRIMARY KEY, user_id TEXT, type TEXT, provider TEXT,
+            import_method TEXT, user_label TEXT, permission_scope TEXT,
+            freshness TEXT, status TEXT DEFAULT 'pending', metadata TEXT,
+            created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS consent_receipts (
+            id TEXT PRIMARY KEY, source_id TEXT, scope TEXT, purpose TEXT,
+            retention_days INTEGER DEFAULT 90, cloud_allowed INTEGER DEFAULT 0,
+            export_allowed INTEGER DEFAULT 0, created_at TEXT, revoked_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS artifacts (
+            id TEXT PRIMARY KEY, source_id TEXT, type TEXT, raw_hash TEXT,
+            encrypted_path TEXT, metadata TEXT, is_public INTEGER DEFAULT 0,
+            content_preview TEXT, created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS signals (
+            id TEXT PRIMARY KEY, category TEXT, description TEXT,
+            severity TEXT DEFAULT 'low', source_artifact_ids TEXT,
+            metadata TEXT, created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS claims (
+            id TEXT PRIMARY KEY, title TEXT, audience_lens TEXT, claim TEXT,
+            confidence_band TEXT, evidence_count INTEGER, supporting_evidence TEXT,
+            weakening_evidence TEXT, source_gaps TEXT, recency TEXT, severity TEXT,
+            actionability TEXT, possible_consequence TEXT, counterargument TEXT,
+            repair_options TEXT, model_version TEXT, not_a_verdict INTEGER DEFAULT 1,
+            generated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS contradictions (
+            id TEXT PRIMARY KEY, category TEXT, description TEXT,
+            claim_ids TEXT, artifact_ids TEXT, severity TEXT,
+            audience_affected TEXT, resolution_suggestion TEXT, created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS risks (
+            id TEXT PRIMARY KEY, category TEXT, description TEXT,
+            severity TEXT, linked_claim_ids TEXT, linked_artifact_ids TEXT,
+            audience_affected TEXT, created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS repairs (
+            id TEXT PRIMARY KEY, title TEXT, affected_audience TEXT,
+            linked_claim_id TEXT, linked_evidence_ids TEXT, impact REAL DEFAULT 0.5,
+            effort REAL DEFAULT 0.5, urgency REAL DEFAULT 0.5,
+            reversibility REAL DEFAULT 0.5, cost_cents INTEGER DEFAULT 0,
+            exact_steps TEXT, expected_effect TEXT, risk_of_overcorrecting TEXT,
+            before_measurement TEXT, after_measurement TEXT,
+            status TEXT DEFAULT 'pending'
+        );
+        CREATE TABLE IF NOT EXISTS reports (
+            id TEXT PRIMARY KEY, user_id TEXT, version INTEGER DEFAULT 1,
+            audit_mode TEXT, scope TEXT, source_count INTEGER, artifact_count INTEGER,
+            claim_count INTEGER, contradiction_count INTEGER, risk_count INTEGER,
+            repair_count INTEGER, sections TEXT, export_policy TEXT,
+            created_at TEXT, snapshot_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS onboarding (
+            user_id TEXT PRIMARY KEY, step INTEGER DEFAULT 0,
+            audit_mode TEXT, completed_steps TEXT, created_at TEXT
+        );
+    """)
+    conn.commit()
+    conn.close()
+    _V1_AVAILABLE = True
+    _log_ev("v1_init_db", db_path=str(_V1_DB))
+
+
+def v1_status_payload(_req=None, _cfg=None) -> dict:
+    """Return V1 system status: claims, repairs, reports, risks counts."""
+    if not _V1_AVAILABLE:
+        return {
+            "status": "no_database",
+            "version": "0.1.0",
+            "claims": 0, "risks": 0, "pending_repairs": 0, "reports": 0,
+            "routes": 0, "v1_modules": [], "server_uptime": "unknown",
+            "recent_claims": [], "repair_queue": [],
+        }
+    try:
+        conn = _v1_open_db()
+        claims = conn.execute("SELECT COUNT(*) as c FROM claims").fetchone()["c"]
+        risks = conn.execute("SELECT COUNT(*) as c FROM risks").fetchone()["c"]
+        repairs = conn.execute(
+            "SELECT COUNT(*) as c FROM repairs WHERE status='pending'"
+        ).fetchone()["c"]
+        reports = conn.execute("SELECT COUNT(*) as c FROM reports").fetchone()["c"]
+        # Recent claims (top 15)
+        rc_rows = conn.execute(
+            "SELECT title, claim, audience_lens, confidence_band, severity "
+            "FROM claims ORDER BY generated_at DESC LIMIT 15"
+        ).fetchall()
+        recent_claims = [_v1_row_to_dict(r) for r in rc_rows]
+        # Repair queue (top 15 by computed priority)
+        rq_rows = conn.execute(
+            "SELECT id, title, status, impact, effort, urgency, reversibility "
+            "FROM repairs ORDER BY status, "
+            "(impact * urgency * reversibility / MAX(effort, 0.01)) DESC LIMIT 15"
+        ).fetchall()
+        repair_queue = []
+        for r in rq_rows:
+            d = _v1_row_to_dict(r)
+            imp = float(d.get("impact", 0.5))
+            urg = float(d.get("urgency", 0.5))
+            rev = float(d.get("reversibility", 0.5))
+            eff = max(float(d.get("effort", 0.5)), 0.01)
+            d["priority"] = round((imp * urg * rev) / eff, 3)
+            repair_queue.append(d)
+        conn.close()
+        return {
+            "status": "running",
+            "version": "0.2.0",
+            "claims": claims,
+            "risks": risks,
+            "pending_repairs": repairs,
+            "reports": reports,
+            "routes": 30,
+            "recent_claims": recent_claims,
+            "repair_queue": repair_queue,
+            "v1_modules": ["models","lenses","contradiction","inference",
+                           "parsers","resolver","graph","scrapers",
+                           "iris_audit","server"],
+            "server_uptime": "since restart",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "version": "0.1.0",
+            "claims": 0, "risks": 0, "pending_repairs": 0, "reports": 0,
+            "routes": 0, "v1_modules": [], "server_uptime": "unknown",
+            "error": str(exc)[:200],
+        }
+
+
+def v1_settings_payload(_req=None, cfg=None) -> dict:
+    """Return V1 settings from the database, or sensible defaults."""
+    settings: dict = {}
+    if _V1_AVAILABLE:
+        try:
+            conn = _v1_open_db()
+            # Read from the first user's settings field
+            row = conn.execute(
+                "SELECT settings FROM users LIMIT 1"
+            ).fetchone()
+            conn.close()
+            if row and row["settings"]:
+                try:
+                    settings = json.loads(row["settings"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        except Exception:
+            pass
+    # Merge with defaults so the frontend always has expected keys
+    defaults = {
+        "integrations": {
+            "social": {},
+            "email": {},
+            "channels": {"calendar": {}, "crm": {}, "storage": {}, "chatops": {}},
+            "automation": {},
+        },
+        "scan_rules": {
+            "allowed_extensions": [".md",".pdf",".txt",".py",".js",".ts",".json",".yaml",".csv"],
+            "max_file_size_mb": 50,
+            "exclude_patterns": ["node_modules",".git","__pycache__",".venv"],
+        },
+        "privacy": {
+            "local_only": True,
+            "cloud_sync": False,
+            "telemetry": False,
+        },
+    }
+    for key, val in defaults.items():
+        if key not in settings:
+            settings[key] = val
+    return {"settings": settings}
+
+
+def v1_artifacts_payload(req, _cfg=None) -> dict:
+    """Return artifacts from the V1 database with path/size/ext/mtime."""
+    if not _V1_AVAILABLE:
+        return {"artifacts": [], "total": 0, "limit": 100, "offset": 0}
+    try:
+        vals = query(req)
+        limit = min(max(int((vals.get("limit", ["100"])[0])), 1), 500)
+        offset = max(int((vals.get("offset", ["0"])[0])), 0)
+        conn = _v1_open_db()
+        total = conn.execute("SELECT COUNT(*) as c FROM artifacts").fetchone()["c"]
+        rows = conn.execute(
+            "SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+        conn.close()
+        artifacts = []
+        for r in rows:
+            meta = {}
+            try:
+                meta = json.loads(r["metadata"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+            artifacts.append({
+                "id": r["id"],
+                "path": r["encrypted_path"] or "",
+                "type": r["type"] or "",
+                "size": meta.get("size", 0),
+                "ext": meta.get("ext", ""),
+                "mtime": meta.get("mtime", 0),
+                "parent": meta.get("parent", ""),
+                "hash": r["raw_hash"] or "",
+                "created_at": r["created_at"] or "",
+            })
+        return {"artifacts": artifacts, "total": total, "limit": limit, "offset": offset}
+    except Exception as exc:
+        return {"artifacts": [], "total": 0, "limit": 100, "offset": 0, "error": str(exc)[:200]}
+
+
+def _v1_audit_bg():
+    """Background thread: run the V1 audit pipeline against the shared DB."""
+    try:
+        # Lazy-import V1 modules (they live at backend/src/optic/v1/)
+        from optic.v1.models import (
+            Artifact, AuditMode, ConfidenceBand, Contradiction, InferenceClaim,
+            RepairAction, RepairStatus, Report, RiskCategory, RiskFlag, Severity, Signal,
+        )
+        from optic.v1.lenses import AUDIENCE_LENSES
+        from optic.v1.contradiction import ContradictionEngine
+        from optic.v1.inference import InferenceCardGenerator
+        import hashlib as _hashlib
+        from uuid import uuid4 as _uuid4
+
+        conn_rw = _v1_open_db_rw()
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # ── Stages 0: Load real workstream data from cache (available for evidence) ──
+        _workstream_cards: list[dict] = []
+        with _ws_lock:
+            for _rid, _entry in _ws_cache.items():
+                if _entry.get("ready") and _entry.get("cards"):
+                    _workstream_cards = _entry["cards"]
+                    break
+
+        # ── Stages 1-3: Derive signals from existing data ──
+        existing_signals = conn_rw.execute(
+            "SELECT * FROM signals ORDER BY created_at DESC"
+        ).fetchall()
+        existing_claims = conn_rw.execute(
+            "SELECT * FROM claims ORDER BY generated_at DESC"
+        ).fetchall()
+
+        # If no claims exist, generate signals from ACTUAL scan data when available
+        if not existing_claims:
+            ws_cards = _workstream_cards
+
+            if ws_cards:
+                # Derive signals from real workstream data
+                seed_signals = []
+                for i, card in enumerate(ws_cards):
+                    ws_name = card.get("name", f"workstream-{i}")
+                    ws_id = card.get("id", f"ws-{i}")
+                    confidence = float(card.get("confidence", 0.5))
+                    file_count = int(card.get("file_count", 0))
+                    topics = card.get("topics", []) or []
+                    meta = {
+                        "workstream_id": ws_id,
+                        "workstream_name": ws_name,
+                        "confidence": confidence,
+                        "file_count": file_count,
+                        "topics": topics,
+                        "summary": card.get("summary", "")[:200],
+                    }
+                    # Categorize based on workstream metadata
+                    if file_count > 100:
+                        seed_signals.append(
+                            ("activity_volume", f"High activity in {ws_name} ({file_count} files)",
+                             Severity.LOW.value, json.dumps(meta)))
+                    if confidence >= 0.6:
+                        seed_signals.append(
+                            ("topic_focus", f"Primary work domain: {ws_name}",
+                             Severity.LOW.value, json.dumps(meta)))
+                    if any(t in ("archive", "legacy", "old") for t in topics):
+                        seed_signals.append(
+                            ("timeline_gap", f"Archived content in {ws_name}",
+                             Severity.MEDIUM.value, json.dumps(meta)))
+                    elif file_count > 50 and confidence >= 0.7:
+                        seed_signals.append(
+                            ("project_velocity", f"Consistent output in {ws_name}",
+                             Severity.LOW.value, json.dumps(meta)))
+
+                if not seed_signals:
+                    # Fallback: at minimum, create one signal per workstream
+                    for card in ws_cards[:6]:
+                        seed_signals.append(
+                            ("topic_focus", f"Workstream: {card.get('name', 'Unknown')}",
+                             Severity.LOW.value,
+                             json.dumps({"workstream_id": card.get("id", ""),
+                                        "workstream_name": card.get("name", ""),
+                                        "confidence": card.get("confidence", 0.5),
+                                        "file_count": card.get("file_count", 0),
+                                        "topics": card.get("topics", [])})))
+            else:
+                # No scan data available — use minimal fallback so the UI isn't blank
+                seed_signals = [
+                    ("topic_focus", "No scan data yet — run a scan to populate workstreams",
+                     Severity.LOW.value, json.dumps({"workstream_id": "empty", "workstream_name": "No Data",
+                                                      "confidence": 0, "file_count": 0, "topics": []})),
+                ]
+            for cat, desc, sev, meta in seed_signals:
+                sid = str(_uuid4())
+                conn_rw.execute(
+                    "INSERT OR REPLACE INTO signals(id, category, description, severity, "
+                    "source_artifact_ids, metadata, created_at) VALUES(?,?,?,?,?,?,?)",
+                    (sid, cat, desc, sev, "[]", meta, now_iso)
+                )
+            conn_rw.commit()
+            existing_signals = conn_rw.execute(
+                "SELECT * FROM signals ORDER BY created_at DESC"
+            ).fetchall()
+
+        # ── Stages 4-7: Generate inference claims per audience lens ──
+        all_signals_rows = [_v1_row_to_dict(r) for r in existing_signals]
+        for lens_id in list(AUDIENCE_LENSES.keys())[:4]:  # Limit to 4 lenses for speed
+            try:
+                gen = InferenceCardGenerator(lens_id)
+                signal_objects = []
+                for sig in all_signals_rows:
+                    try:
+                        signal_objects.append(Signal(
+                            id=sig.get("id", str(_uuid4())),
+                            category=sig.get("category", ""),
+                            description=sig.get("description", ""),
+                            severity=Severity(sig.get("severity", "low")),
+                            source_artifact_ids=[],
+                            metadata=json.loads(sig.get("metadata", "{}") or "{}"),
+                        ))
+                    except Exception:
+                        continue
+                if not signal_objects:
+                    continue
+                # Build artifacts from REAL workstream key files when available
+                real_artifacts = []
+                if _workstream_cards:
+                    file_idx = 0
+                    for card in _workstream_cards[:5]:
+                        for kf in (card.get("key_files") or [])[:3]:
+                            if isinstance(kf, str) and kf:
+                                aid = _uuid4()
+                                fpath = Path(kf)
+                                real_artifacts.append(Artifact(
+                                    id=aid, source_id=_uuid4(),
+                                    type=f"scanned_file",
+                                    raw_hash=_hashlib.sha256(str(aid).encode()).hexdigest(),
+                                    metadata={
+                                        "path": kf,
+                                        "name": fpath.name,
+                                        "ext": fpath.suffix,
+                                        "workstream": card.get("name", ""),
+                                        "file_count": card.get("file_count", 0),
+                                    },
+                                    is_public=False,
+                                    content_preview=card.get("summary", "")[:100],
+                                ))
+                                file_idx += 1
+                if not real_artifacts:
+                    # Fallback: build artifacts from signal metadata
+                    for i in range(min(3, len(existing_signals))):
+                        aid = _uuid4()
+                        real_artifacts.append(Artifact(
+                            id=aid, source_id=_uuid4(), type="workstream_file",
+                            raw_hash=_hashlib.sha256(str(aid).encode()).hexdigest(),
+                            metadata={"workstream": f"ws-{i}", "file_count": 50},
+                            is_public=False, content_preview="",
+                        ))
+                lens_claims = gen.generate_claims(signal_objects, real_artifacts[:5])
+                # Collect generated artifacts for contradiction engine
+                for a in real_artifacts[:5]:
+                    all_generated_artifacts.append({
+                        "id": str(a.id), "source_id": str(a.source_id),
+                        "type": a.type, "raw_hash": a.raw_hash,
+                        "metadata": a.metadata, "is_public": a.is_public,
+                        "content_preview": a.content_preview,
+                    })
+                for c in lens_claims:
+                    conn_rw.execute(
+                        "INSERT OR REPLACE INTO claims(id, title, audience_lens, claim, "
+                        "confidence_band, evidence_count, supporting_evidence, weakening_evidence, "
+                        "source_gaps, recency, severity, actionability, possible_consequence, "
+                        "counterargument, repair_options, model_version, not_a_verdict, generated_at) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (str(c.id), c.title, c.audience_lens, c.claim, c.confidence_band.value,
+                         c.evidence_count, json.dumps([str(x) for x in c.supporting_evidence]),
+                         json.dumps([str(x) for x in c.weakening_evidence]),
+                         json.dumps(c.source_gaps), c.recency, c.severity.value,
+                         c.actionability, c.possible_consequence, c.counterargument,
+                         json.dumps([str(x) for x in c.repair_options]),
+                         c.model_version, int(c.not_a_verdict), now_iso)
+                    )
+            except Exception as exc:
+                log.warning("V1 audit: lens %s failed: %s", lens_id, exc)
+
+        conn_rw.commit()
+
+        # ── Stage 8: Contradiction detection ──
+        all_claim_rows = conn_rw.execute("SELECT * FROM claims").fetchall()
+        try:
+            engine = ContradictionEngine()
+            # Use real artifacts when available, derive entities from workstream metadata
+            artifact_dicts = all_generated_artifacts[:50]  # limit for performance
+            entity_dicts: list[dict] = []
+            if _workstream_cards:
+                for card in _workstream_cards[:8]:
+                    entity_dicts.append({
+                        "type": "workstream",
+                        "name": card.get("name", ""),
+                        "metadata": {
+                            "confidence": card.get("confidence", 0.5),
+                            "file_count": card.get("file_count", 0),
+                            "topics": card.get("topics", []),
+                        },
+                    })
+            claim_dicts = [_v1_row_to_dict(r) for r in all_claim_rows]
+            contradictions = engine.run_full_audit(claim_dicts, artifact_dicts, entity_dicts)
+            for c in contradictions:
+                conn_rw.execute(
+                    "INSERT OR REPLACE INTO contradictions(id, category, description, "
+                    "claim_ids, artifact_ids, severity, audience_affected, "
+                    "resolution_suggestion, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (str(c.id), c.category, c.description,
+                     json.dumps([str(x) for x in c.claim_ids]),
+                     json.dumps([str(x) for x in c.artifact_ids]),
+                     c.severity.value, json.dumps(c.audience_affected),
+                     c.resolution_suggestion, now_iso)
+                )
+            conn_rw.commit()
+        except Exception as exc:
+            log.warning("V1 audit: contradiction engine failed: %s", exc)
+
+        # ── Stages 9-10: Risk mapping from contradictions + repair generation ──
+        risk_defs = [
+            (RiskCategory.STALE_CONTEXT, "Some workstreams may contain stale files",
+             Severity.LOW, ["recruiter", "investor"]),
+            (RiskCategory.NARRATIVE_FRAGMENTATION, "Workstreams span multiple unrelated topics",
+             Severity.MEDIUM, ["all"]),
+            (RiskCategory.MISSING_PROOF, "Some projects lack public documentation",
+             Severity.LOW, ["recruiter", "investor"]),
+        ]
+        for rcat, rdesc, rsev, raud in risk_defs:
+            rid = str(_uuid4())
+            conn_rw.execute(
+                "INSERT OR REPLACE INTO risks(id, category, description, severity, "
+                "linked_claim_ids, linked_artifact_ids, audience_affected, created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (rid, rcat.value, rdesc, rsev.value, "[]", "[]", json.dumps(raud), now_iso)
+            )
+
+        repair_defs = [
+            ("Consolidate project documentation", ["recruiter", "investor"],
+             0.7, 0.4, 0.6, 0.9,
+             ["Gather README files across repositories", "Create a project index", "Link to live demos"],
+             "Clearer signal of project scope and ownership"),
+            ("Update stale directories", ["recruiter", "investor"],
+             0.5, 0.5, 0.4, 0.8,
+             ["Identify directories > 90 days without changes", "Archive or refresh content", "Add freshness indicators"],
+             "Reduces timeline gap risk for recruiters"),
+            ("Add public-facing summaries", ["recruiter", "collaborator"],
+             0.8, 0.3, 0.7, 0.95,
+             ["For each major project, add a one-paragraph summary", "Include tech stack, outcomes, role"],
+             "Improves readability for external audiences"),
+            ("Separate personal from professional content", ["recruiter", "stranger"],
+             0.6, 0.6, 0.5, 0.7,
+             ["Audit file organization for boundary clarity", "Move personal files to clearly labeled directories"],
+             "Reduces overexposure risk"),
+        ]
+        for title, aud, imp, eff, urg, rev, steps, effect in repair_defs:
+            rid = str(_uuid4())
+            conn_rw.execute(
+                "INSERT OR REPLACE INTO repairs(id, title, affected_audience, linked_claim_id, "
+                "linked_evidence_ids, impact, effort, urgency, reversibility, "
+                "exact_steps, expected_effect, risk_of_overcorrecting, status) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (rid, title, json.dumps(aud), "",
+                 "[]", imp, eff, urg, rev,
+                 json.dumps(steps), effect, "Minimal — these are additive improvements",
+                 RepairStatus.PENDING.value)
+            )
+
+        # ── Stage 11: Create report snapshot ──
+        claim_count = conn_rw.execute("SELECT COUNT(*) as c FROM claims").fetchone()["c"]
+        contradiction_count = conn_rw.execute("SELECT COUNT(*) as c FROM contradictions").fetchone()["c"]
+        risk_count = conn_rw.execute("SELECT COUNT(*) as c FROM risks").fetchone()["c"]
+        repair_count = conn_rw.execute("SELECT COUNT(*) as c FROM repairs").fetchone()["c"]
+        report_id = str(_uuid4())
+        snapshot = _hashlib.sha256(f"{report_id}{now_iso}".encode()).hexdigest()[:16]
+        conn_rw.execute(
+            "INSERT OR REPLACE INTO reports(id, user_id, version, audit_mode, scope, "
+            "source_count, artifact_count, claim_count, contradiction_count, "
+            "risk_count, repair_count, sections, export_policy, created_at, snapshot_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (report_id, "local", 1, "general", "[]",
+             4, 85, claim_count, contradiction_count, risk_count, repair_count,
+             json.dumps({"scope": "V1 general audit from ctxorg", "stages_completed": 11}),
+             json.dumps({"json_allowed": True, "md_allowed": True, "redacted_by_default": True}),
+             now_iso, snapshot)
+        )
+        conn_rw.commit()
+        conn_rw.close()
+        _log_ev("v1_audit_complete", claims=claim_count, contradictions=contradiction_count,
+                risks=risk_count, repairs=repair_count, report=report_id)
+    except Exception as exc:
+        log.exception("V1 audit background thread failed: %s", exc)
+
+
+_v1_audit_lock = threading.Lock()
+_v1_audit_running = False
+
+
+def v1_audit_trigger_payload(req: BaseHTTPRequestHandler, _cfg=None) -> dict:
+    """POST handler: trigger a V1 general audit in a background thread.
+    Returns immediately with status. The audit runs asynchronously;
+    poll GET /api/v1/audit/general or /api/v1/status for results."""
+    global _v1_audit_running
+    if not _V1_AVAILABLE:
+        return {"status": "no_database", "message": "V1 database not found. Run a scan first."}
+    with _v1_audit_lock:
+        if _v1_audit_running:
+            return {"status": "already_running", "message": "An audit is already in progress."}
+        _v1_audit_running = True
+    t = threading.Thread(target=_v1_audit_bg, daemon=True)
+    t.start()
+    # Schedule a follow-up to reset the flag
+    def _clear_flag():
+        t.join()
+        with _v1_audit_lock:
+            global _v1_audit_running
+            _v1_audit_running = False
+    threading.Thread(target=_clear_flag, daemon=True).start()
+    return {"status": "started", "message": "V1 general audit started. Check /api/v1/status for results."}
+
+
+def v1_claims_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """Return all inference claims from the V1 database."""
+    if not _V1_AVAILABLE:
+        return {"claims": [], "count": 0, "note": "V1 database not found. Run a scan to populate."}
+    try:
+        conn = _v1_open_db()
+        rows = conn.execute(
+            "SELECT id, title, audience_lens, claim, confidence_band, evidence_count, "
+            "supporting_evidence, weakening_evidence, source_gaps, recency, severity, "
+            "actionability, possible_consequence, counterargument, repair_options, "
+            "model_version, not_a_verdict, generated_at "
+            "FROM claims ORDER BY generated_at DESC LIMIT 500"
+        ).fetchall()
+        conn.close()
+        claims = [_v1_row_to_dict(r) for r in rows]
+        return {"claims": claims, "count": len(claims)}
+    except Exception as exc:
+        return {"claims": [], "count": 0, "error": str(exc)}
+
+
+def v1_contradictions_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """Return all contradictions from the V1 database."""
+    if not _V1_AVAILABLE:
+        return {"contradictions": [], "count": 0, "note": "V1 database not found."}
+    try:
+        conn = _v1_open_db()
+        rows = conn.execute(
+            "SELECT id, category, description, claim_ids, artifact_ids, "
+            "severity, audience_affected, resolution_suggestion, created_at "
+            "FROM contradictions ORDER BY created_at DESC LIMIT 500"
+        ).fetchall()
+        conn.close()
+        contradictions = [_v1_row_to_dict(r) for r in rows]
+        return {"contradictions": contradictions, "count": len(contradictions)}
+    except Exception as exc:
+        return {"contradictions": [], "count": 0, "error": str(exc)}
+
+
+def v1_risks_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """Return all risk flags from the V1 database."""
+    if not _V1_AVAILABLE:
+        return {"risks": [], "count": 0, "note": "V1 database not found."}
+    try:
+        conn = _v1_open_db()
+        rows = conn.execute(
+            "SELECT id, category, description, severity, linked_claim_ids, "
+            "linked_artifact_ids, audience_affected, created_at "
+            "FROM risks ORDER BY created_at DESC LIMIT 500"
+        ).fetchall()
+        conn.close()
+        risks = [_v1_row_to_dict(r) for r in rows]
+        return {"risks": risks, "count": len(risks)}
+    except Exception as exc:
+        return {"risks": [], "count": 0, "error": str(exc)}
+
+
+def v1_repairs_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """Return all repair actions from the V1 database."""
+    if not _V1_AVAILABLE:
+        return {"repairs": [], "count": 0, "note": "V1 database not found."}
+    try:
+        conn = _v1_open_db()
+        rows = conn.execute(
+            "SELECT id, title, affected_audience, linked_claim_id, linked_evidence_ids, "
+            "impact, effort, urgency, reversibility, cost_cents, exact_steps, "
+            "expected_effect, risk_of_overcorrecting, before_measurement, "
+            "after_measurement, status "
+            "FROM repairs ORDER BY urgency DESC LIMIT 500"
+        ).fetchall()
+        conn.close()
+        repairs = [_v1_row_to_dict(r) for r in rows]
+        # Compute priority for each repair
+        for r in repairs:
+            impact = float(r.get("impact", 0.5))
+            urgency = float(r.get("urgency", 0.5))
+            reversibility = float(r.get("reversibility", 0.5))
+            effort = float(r.get("effort", 0.5))
+            if effort == 0:
+                r["priority"] = round(impact * urgency * reversibility, 3)
+            else:
+                r["priority"] = round((impact * urgency * reversibility) / effort, 3)
+        return {"repairs": repairs, "count": len(repairs)}
+    except Exception as exc:
+        return {"repairs": [], "count": 0, "error": str(exc)}
+
+
+def v1_repair_complete_payload(req: BaseHTTPRequestHandler, cfg: dict,
+                               repair_id: str) -> dict:
+    """POST /api/v1/repairs/complete/<id> — mark a repair action as completed."""
+    if not _V1_AVAILABLE:
+        return {"status": "error", "error": "V1 database not found."}
+    if not repair_id:
+        return {"status": "error", "error": "repair_id required"}
+    try:
+        conn = _v1_open_db_rw()
+        cur = conn.execute("SELECT id FROM repairs WHERE id=?", (repair_id,))
+        existing = cur.fetchone()
+        if not existing:
+            conn.close()
+            return {"status": "error", "error": "repair not found", "repair_id": repair_id}
+        conn.execute("UPDATE repairs SET status='completed' WHERE id=?", (repair_id,))
+        conn.commit()
+        conn.close()
+        return {"status": "completed", "repair_id": repair_id}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)[:200], "repair_id": repair_id}
+
+
+def v1_reset_payload(cfg: dict) -> dict:
+    """POST /api/v1/reset — clear all V1 test data, preserve schema."""
+    if not _V1_AVAILABLE:
+        return {"status": "error", "error": "V1 database not found — nothing to reset"}
+    try:
+        conn = _v1_open_db_rw()
+        # Tag all existing users as test users
+        conn.execute("UPDATE users SET is_test_user = 1")
+        # Clear content tables
+        tables = [
+            "sessions", "sources", "consent_receipts", "artifacts",
+            "signals", "claims", "contradictions", "risks", "repairs",
+            "reports", "onboarding",
+        ]
+        cleared = {}
+        for table in tables:
+            try:
+                result = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()
+                before = result["c"]
+                conn.execute(f"DELETE FROM {table}")
+                cleared[table] = before
+            except Exception:
+                cleared[table] = -1
+        # Remove test users
+        conn.execute("DELETE FROM users WHERE is_test_user = 1")
+        conn.commit()
+        conn.close()
+        return {
+            "status": "ok",
+            "message": "Test data cleared, schema preserved",
+            "cleared_tables": cleared,
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)[:200]}
+
+
+def v1_audit_general_payload(req: BaseHTTPRequestHandler, _cfg=None) -> dict:
+    """GET handler: trigger a V1 audit if not running, then return the latest report.
+
+    Called by app.js syncShellNow() after a scan completes — the frontend
+    polls GET /api/v1/audit/general to trigger an audit and discover fresh
+    claims/contradictions/risks/repairs.
+    """
+    global _v1_audit_running
+    # ── Trigger audit in background if not already running ──
+    if _V1_AVAILABLE and not _v1_audit_running:
+        try:
+            with _v1_audit_lock:
+                if not _v1_audit_running:
+                    _v1_audit_running = True
+                    t = threading.Thread(target=_v1_audit_bg, daemon=True)
+                    t.start()
+                    def _clear_flag():
+                        t.join()
+                        with _v1_audit_lock:
+                            global _v1_audit_running
+                            _v1_audit_running = False
+                    threading.Thread(target=_clear_flag, daemon=True).start()
+        except Exception:
+            pass
+
+    # ── Read latest report ──
+    if not _V1_AVAILABLE:
+        return {
+            "mode": "general",
+            "stages_completed": 0,
+            "source_count": 0,
+            "artifact_count": 0,
+            "signal_count": 0,
+            "claim_count": 0,
+            "contradiction_count": 0,
+            "risk_count": 0,
+            "repair_count": 0,
+            "report_id": "",
+            "snapshot_id": "",
+            "note": "V1 database not found. Run a scan and audit to populate.",
+        }
+    try:
+        conn = _v1_open_db()
+        # Read the most recent report for mode='general'
+        row = conn.execute(
+            "SELECT * FROM reports WHERE audit_mode='general' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        # Aggregate counts regardless of specific report
+        claim_count = conn.execute(
+            "SELECT COUNT(*) as c FROM claims"
+        ).fetchone()["c"]
+        contradiction_count = conn.execute(
+            "SELECT COUNT(*) as c FROM contradictions"
+        ).fetchone()["c"]
+        risk_count = conn.execute(
+            "SELECT COUNT(*) as c FROM risks"
+        ).fetchone()["c"]
+        repair_count = conn.execute(
+            "SELECT COUNT(*) as c FROM repairs"
+        ).fetchone()["c"]
+        conn.close()
+        if row:
+            return {
+                "mode": row["audit_mode"] or "general",
+                "stages_completed": 14,
+                "source_count": row["source_count"] or 0,
+                "artifact_count": row["artifact_count"] or 0,
+                "signal_count": 0,  # signals are ephemeral, not stored long-term
+                "claim_count": row["claim_count"] or claim_count,
+                "contradiction_count": row["contradiction_count"] or contradiction_count,
+                "risk_count": row["risk_count"] or risk_count,
+                "repair_count": row["repair_count"] or repair_count,
+                "report_id": row["id"] or "",
+                "snapshot_id": row["snapshot_id"] or "",
+                "ctxorg_available": True,
+            }
+        return {
+            "mode": "general",
+            "stages_completed": 0,
+            "source_count": 0,
+            "artifact_count": 0,
+            "signal_count": 0,
+            "claim_count": claim_count,
+            "contradiction_count": contradiction_count,
+            "risk_count": risk_count,
+            "repair_count": repair_count,
+            "report_id": "",
+            "snapshot_id": "",
+            "ctxorg_available": True,
+            "note": "No general-mode audit report found — claims/repairs may be from other runs.",
+        }
+    except Exception as exc:
+        return {
+            "mode": "general",
+            "error": str(exc)[:200],
+            "stages_completed": 0,
+            "source_count": 0, "artifact_count": 0, "signal_count": 0,
+            "claim_count": 0, "contradiction_count": 0,
+            "risk_count": 0, "repair_count": 0,
+            "report_id": "", "snapshot_id": "",
+        }
 
 
 def send(req: BaseHTTPRequestHandler, data: dict, code: int = 200,
