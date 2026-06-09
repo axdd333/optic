@@ -1,4 +1,10 @@
 """
+# DEPRECATED — never imported by the running ctxorg/server.py
+# Only referenced by optic/v1/scrapers.py and optic/v1/server.py (neither running).
+# Stage 4 (Evidence extraction) is scheduled for remediation — this registry
+# will be wired into ctxorg/server.py when that stage is complete.
+# DO NOT DELETE — keep as reference implementation for pipeline Stage 4.
+
 Optic V1 — Parser Library
 ==========================
 17 format parsers. Each parser takes raw bytes or file path and returns
@@ -75,6 +81,9 @@ class ParserRegistry:
 
     def parse(self, filepath: str = "", content: bytes = b"", format_hint: str = "") -> ParseResult:
         fmt = format_hint or self.detect_format(filepath, content)
+        # Normalise: txt, md, rst all map to the same parser
+        if fmt in ("txt", "md", "rst"):
+            fmt = "txt_md"
         parser = getattr(self, f"parse_{fmt}", None)
         if parser:
             return parser(filepath, content)
@@ -158,8 +167,11 @@ class ParserRegistry:
                 doc.close()
             except ImportError:
                 import subprocess
-                proc = subprocess.run(["pdftotext", "--", filepath or "-", "-"], input=content, capture_output=True, text=True)
-                text = proc.stdout[:5000]
+                proc = subprocess.run(
+                    ["pdftotext", "--", filepath or "-", "-"],
+                    input=content, capture_output=True
+                )
+                text = proc.stdout.decode("utf-8", errors="replace")[:5000]
             result.artifacts.append(self._make_artifact(
                 "pdf", hashlib.sha256(content or Path(filepath).read_bytes()).hexdigest(),
                 {"path": filepath, "pages": len(text.split("\f")) if text else 0},
@@ -187,7 +199,16 @@ class ParserRegistry:
     def parse_txt_md(self, filepath: str = "", content: bytes = b"") -> ParseResult:
         result = ParseResult()
         try:
-            text = content.decode("utf-8", errors="replace") if content else Path(filepath).read_text(errors="replace")
+            text = ""
+            if content:
+                text = content.decode("utf-8", errors="replace")
+            elif filepath:
+                try:
+                    text = Path(filepath).read_text(errors="replace")
+                except (IOError, OSError) as e:
+                    # File may be locked (errno 11 on macOS) or inaccessible
+                    result.warnings.append(f"text read error for {filepath}: {e}")
+                    return result
             result.artifacts.append(self._make_artifact(
                 "text", hashlib.sha256(content or Path(filepath).read_bytes()).hexdigest(),
                 {"path": filepath, "lines": len(text.splitlines()), "chars": len(text)},

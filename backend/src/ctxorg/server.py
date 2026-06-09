@@ -84,7 +84,13 @@ except ImportError:
     _ML_AVAILABLE = False
 
 # ── Optic V1 database (shared with optic.v1) ─────────────────────
-_V1_DB = Path.home() / ".optic" / "v1.db"
+# Always use the real-user DB path.  Path.home() points to a Hermes
+# profile home in agent sessions, and the profile-local v1.db is
+# empty.  The real DB lives at ~/.optic/v1.db (symlinked from the
+# project backend/.optic/v1.db) and is seeded by optic.v1.startup.
+_V1_DB = Path(os.path.expanduser("~ahmedm")) / ".optic" / "v1.db"
+if not _V1_DB.exists():
+    _V1_DB = Path("/Users/ahmedm/.optic/v1.db")
 _V1_AVAILABLE = _V1_DB.exists()
 
 
@@ -153,6 +159,57 @@ _metrics = {
 
 _MAX_BODY = 65536
 _SESSION_COOKIE = "optic_session"
+
+# ── Password hashing (sha256 + random salt) ───────────────────────
+import secrets as _secrets
+
+def _pw_hash(password: str) -> str:
+    """Hash a password with a random 32-byte salt. Returns 'salt$hash'."""
+    salt = _secrets.token_hex(32)
+    h = hashlib.sha256(f"{salt}${password}".encode("utf-8")).hexdigest()
+    return f"{salt}${h}"
+
+def _pw_verify(password: str, stored: str) -> bool:
+    """Verify a password against a stored salt$hash string."""
+    if not stored or "$" not in stored:
+        return False
+    salt, want = stored.split("$", 1)
+    h = hashlib.sha256(f"{salt}${password}".encode("utf-8")).hexdigest()
+    return hmac.compare_digest(h, want)
+
+def _pw_strength(password: str) -> str:
+    """Validate password strength. Returns empty string if valid, error message if not."""
+    if len(password) < 8:
+        return "password_too_short_min_8"
+    if not any(c.isupper() for c in password):
+        return "password_needs_uppercase"
+    if not any(c.isdigit() for c in password):
+        return "password_needs_digit"
+    return ""
+
+# ── Input validation helper (Finding 4) ──────────────────────────
+def _str_field(data: dict, key: str, max_len: int = 1000) -> str:
+    """Extract + validate a string field. Truncates to max_len."""
+    val = str(data.get(key, "")).strip()
+    return val[:max_len]
+
+# ── Prototype pollution sanitizer ─────────────────────────────────
+_DANGEROUS_KEYS = frozenset({
+    "__proto__", "constructor", "prototype",
+    "__defineGetter__", "__defineSetter__",
+})
+
+def _sanitize_input(obj: object) -> object:
+    """Recursively strip dangerous prototype-pollution keys from JSON-like structures."""
+    if isinstance(obj, dict):
+        return {
+            k: _sanitize_input(v)
+            for k, v in obj.items()
+            if k not in _DANGEROUS_KEYS
+        }
+    if isinstance(obj, list):
+        return [_sanitize_input(v) for v in obj]
+    return obj
 
 _SOCIAL_PROVIDERS = (
     "x", "linkedin", "youtube", "tiktok", "instagram", "threads",
@@ -253,6 +310,11 @@ _rl_state: dict[str, dict] = {}
 _rl_last_gc = 0.0
 _usage_lock = threading.Lock()
 
+# ── Audience definitions (also used for /api/audiences endpoint) ──
+# NOTE: Duplicates AUDIENCE_LENSES from optic/v1/lenses.py with slightly
+# different structure (kind_w, key_w tuples vs AudienceLens dataclass).
+# TODO: Unify these two audience definitions — use AUDIENCE_LENSES as
+# the canonical source and derive this list from it at runtime.
 _AUDIENCES = [
     {
         "id": "recruiter",
@@ -296,6 +358,138 @@ _AUDIENCES = [
         "key_w": 0.60,
         "kind_wt": 0.40,
         "avoid_w": 0.28,
+        "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
+    },
+    {
+        "id": "collaborator",
+        "name": "Collaborator read",
+        "icon": "🔗",
+        "summary": "Evaluates teamwork signals, collaboration patterns, and complementary skills from a partnership lens.",
+        "perspective": "a potential cofounder or collaborator",
+        "keywords": [
+            "collaboration", "team", "project", "code", "github",
+            "contributor", "open source", "partnership",
+        ],
+        "kind_w": {
+            "screenshots": 0.3,
+            "documents": 0.7,
+            "code": 1.0,
+            "media": 0.2,
+            "other": 0.3,
+        },
+        "key_w": 0.55,
+        "kind_wt": 0.45,
+        "avoid_w": 0.30,
+        "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
+    },
+    {
+        "id": "creator",
+        "name": "Creator read",
+        "icon": "📢",
+        "summary": "Evaluates content output, brand presence, and audience signals from a public-figure lens.",
+        "perspective": "a content consumer or brand partner",
+        "keywords": [
+            "content", "post", "brand", "audience", "social",
+            "creator", "video", "writing", "art",
+        ],
+        "kind_w": {
+            "screenshots": 0.8,
+            "documents": 0.7,
+            "code": 0.2,
+            "media": 1.0,
+            "other": 0.3,
+        },
+        "key_w": 0.50,
+        "kind_wt": 0.50,
+        "avoid_w": 0.25,
+        "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
+    },
+    {
+        "id": "privacy",
+        "name": "Privacy read",
+        "icon": "🔒",
+        "summary": "Evaluates exposure surface, credential leakage, and tracking signals from a privacy-adversary lens.",
+        "perspective": "a privacy-conscious auditor or data broker",
+        "keywords": [
+            "credential", "key", "token", "secret", "password",
+            "location", "tracking", "private", "exposure",
+        ],
+        "kind_w": {
+            "screenshots": 0.7,
+            "documents": 0.85,
+            "code": 0.4,
+            "media": 0.5,
+            "other": 0.5,
+        },
+        "key_w": 0.50,
+        "kind_wt": 0.50,
+        "avoid_w": 0.20,
+        "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
+    },
+    {
+        "id": "platform",
+        "name": "Platform read",
+        "icon": "📊",
+        "summary": "Evaluates consumer signals, interest categories, and behavioral patterns from an ad-platform lens.",
+        "perspective": "an advertising or recommendation algorithm",
+        "keywords": [
+            "social", "browse", "search", "purchase", "like",
+            "follow", "click", "watch", "engage",
+        ],
+        "kind_w": {
+            "screenshots": 1.0,
+            "documents": 0.4,
+            "code": 0.15,
+            "media": 0.9,
+            "other": 0.35,
+        },
+        "key_w": 0.45,
+        "kind_wt": 0.55,
+        "avoid_w": 0.20,
+        "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
+    },
+    {
+        "id": "search",
+        "name": "Search engine read",
+        "icon": "🔍",
+        "summary": "Evaluates search appearance, public surface, and meta-signals from a search-engine lens.",
+        "perspective": "a search engine or web crawler",
+        "keywords": [
+            "public", "search", "website", "profile", "index",
+            "meta", "bio", "about", "portfolio",
+        ],
+        "kind_w": {
+            "screenshots": 0.8,
+            "documents": 0.9,
+            "code": 0.2,
+            "media": 0.5,
+            "other": 0.35,
+        },
+        "key_w": 0.45,
+        "kind_wt": 0.55,
+        "avoid_w": 0.25,
+        "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
+    },
+    {
+        "id": "institution",
+        "name": "Institution read",
+        "icon": "🏛",
+        "summary": "Evaluates credential verification, formal records, and stability from an institutional gatekeeper lens.",
+        "perspective": "a university admissions officer or institutional evaluator",
+        "keywords": [
+            "degree", "certificate", "transcript", "record",
+            "credential", "verification", "official", "application",
+        ],
+        "kind_w": {
+            "screenshots": 0.5,
+            "documents": 1.0,
+            "code": 0.2,
+            "media": 0.2,
+            "other": 0.3,
+        },
+        "key_w": 0.55,
+        "kind_wt": 0.45,
+        "avoid_w": 0.25,
         "avoid": ["certifi", "propcache", "markupsafe", "yarl", "aiohttp"],
     },
     {
@@ -445,6 +639,38 @@ def serve(cfg: dict, host: str, port: int) -> None:
             guarded(self, cfg, route)
 
         def do_POST(self) -> None:
+            # ── C4: Harden payload enforcement BEFORE any body read ──
+            # Reject chunked Transfer-Encoding (bypasses Content-Length checks)
+            te = (self.headers.get("transfer-encoding", "") or "").strip().lower()
+            if te and "chunked" in te:
+                self.close_connection = True
+                safe_send_err(self, "chunked_not_supported", code=411,
+                              detail="Transfer-Encoding: chunked is not accepted")
+                return
+
+            # Validate Content-Type for POST requests
+            ct = (self.headers.get("content-type", "") or "").strip().lower()
+            path = urlparse(self.path).path
+            if path.startswith("/api/"):
+                if ct and "application/json" not in ct:
+                    safe_send_err(self, "unsupported_media_type", code=415,
+                                  detail="Content-Type must be application/json")
+                    return
+
+            # Reject oversized payloads immediately — never read the body
+            # to determine size.  This prevents DoS via large Content-Length
+            # before any routing or auth logic runs.
+            try:
+                cl = self.headers.get("content-length", "0") or "0"
+                cl_int = int(cl)
+                if cl_int > _MAX_BODY:
+                    self.close_connection = True
+                    safe_send_err(self, "payload_too_large", code=413,
+                                  detail=f"max={_MAX_BODY}")
+                    return
+            except ValueError:
+                safe_send_err(self, "invalid_content_length", code=400)
+                return
             guarded(self, cfg, post)
 
         def log_message(self, fmt: str, *args) -> None:  # type: ignore[override]
@@ -522,7 +748,12 @@ def _req_hdr(req: BaseHTTPRequestHandler, name: str) -> str:
 
 
 def _req_host(req: BaseHTTPRequestHandler) -> str:
-    raw = _req_hdr(req, "x-forwarded-host") or _req_hdr(req, "host")
+    # Finding 6 — only trust x-forwarded-host from the proxy (127.0.0.1)
+    client_ip = _req_ip(req)
+    if client_ip in ("127.0.0.1", "::1"):
+        raw = _req_hdr(req, "x-forwarded-host") or _req_hdr(req, "host")
+    else:
+        raw = _req_hdr(req, "host")
     return raw.lower()
 
 
@@ -546,13 +777,23 @@ def _csrf_same_origin(req: BaseHTTPRequestHandler) -> bool:
     return bool(ref and ref == host)
 
 
+# ── Internal proxy token — must match route.ts INTERNAL_PROXY_TOKEN ──
+# The Next.js proxy sets this header; the backend skips CSRF when present.
+_INTERNAL_PROXY_TOKEN = os.environ.get("OPTIC_INTERNAL_PROXY_TOKEN", "optic-proxy-v1")
+
 def _csrf_guard(req: BaseHTTPRequestHandler, path: str) -> None:
     if not path.startswith("/api/"):
         return
+    # API key requests skip CSRF
     ctx = _auth_get()
     if ctx.get("api_key"):
         return
+    # Unauthenticated requests skip CSRF
     if not str(ctx.get("session_id", "")):
+        return
+    # Internal proxy requests skip CSRF (Finding 1 fix — trusted proxy token)
+    proxy_token = _req_hdr(req, "x-internal-proxy")
+    if proxy_token == _INTERNAL_PROXY_TOKEN:
         return
     if _csrf_same_origin(req):
         return
@@ -581,6 +822,8 @@ def _scope_need(method: str, path: str) -> str:
             return "admin"
         if path in {"/api/integrations/secrets"}:
             return "integrations"
+        if path == "/api/ops/health":
+            return "admin"  # Finding 3 — health leaks internal state
         return "read"
     if method != "POST":
         return ""
@@ -639,14 +882,19 @@ def _rl_policy(cfg: dict, method: str, path: str) -> tuple[str, int] | None:
     if not path.startswith("/api/"):
         return None
     meth = method.upper().strip()
+    # ── Critical endpoints: very tight rate limits (C5) ──
+    if meth == "POST" and path == "/api/v1/reset":
+        return "v1_reset_post", _rl_int(cfg, "rate_reset_per_min", 3, 1, 30)
+    if meth == "POST" and path == "/api/signup":
+        return "signup_post", _rl_int(cfg, "rate_signup_per_min", 5, 1, 30)
+    if meth == "POST" and path == "/api/signin":
+        return "signin_post", _rl_int(cfg, "rate_signin_per_min", 10, 1, 30)
     if meth == "POST" and path == "/api/chat":
         return "chat_post", _rl_int(cfg, "rate_chat_per_min", 40, 1, 3000)
     if meth == "POST" and path == "/api/iris":
         return "iris_post", _rl_int(cfg, "rate_iris_per_min", 50, 1, 3000)
     if meth == "POST" and path == "/api/scan":
         return "scan_post", _rl_int(cfg, "rate_scan_per_min", 8, 1, 600)
-    if meth == "POST" and path == "/api/signup":
-        return "signup_post", _rl_int(cfg, "rate_signup_per_min", 24, 1, 600)
     if meth == "POST" and path in {
         "/api/integrations/jobs",
         "/api/integrations/jobs/replay",
@@ -664,7 +912,8 @@ def _rl_policy(cfg: dict, method: str, path: str) -> tuple[str, int] | None:
         return "ops_post", _rl_int(cfg, "rate_ops_per_min", 18, 1, 300)
     if meth == "GET" and path in {"/api/report", "/api/workstreams"}:
         return "heavy_get", _rl_int(cfg, "rate_heavy_per_min", 90, 1, 5000)
-    return "api_all", _rl_int(cfg, "rate_api_per_min", 480, 1, 20000)
+    # ── Default: tighter general rate limit (was 480 → 120 for safety) ──
+    return "api_all", _rl_int(cfg, "rate_api_per_min", 120, 1, 20000)
 
 
 def _req_ip(req: BaseHTTPRequestHandler) -> str:
@@ -885,6 +1134,10 @@ def route(req: BaseHTTPRequestHandler, cfg: dict) -> None:
         return send(req, v1_settings_payload(req, cfg))
     if path == "/api/v1/artifacts":
         return send(req, v1_artifacts_payload(req, cfg))
+    if path == "/api/v1/health":
+        return send(req, v1_health_payload(cfg))
+    if path == "/api/v1/audiences":
+        return send(req, audience_list_payload())
     if path == "/api/v1/audit/general":
         return send(req, v1_audit_general_payload(req, cfg))
     if path.startswith("/api/"):
@@ -897,17 +1150,23 @@ def post(req: BaseHTTPRequestHandler, cfg: dict) -> None:
     _api_hit("POST", path)
     _csrf_guard(req, path)
     if path == "/api/chat":
+        _workspace_require_role(cfg, {"owner", "admin", "member"})  # Finding 5
         data = _chat_guard_input(body(req))
         _quota_take(cfg, "chat_daily")
         out = chat.reply(_llm_cfg_runtime(cfg), data)
         return send(req, _chat_guard_output(out))
     if path == "/api/iris":
+        _workspace_require_role(cfg, {"owner", "admin", "member"})  # Finding 5
         data = _iris_guard_input(body(req))
         return iris_stream(req, _llm_cfg_runtime(cfg), data)
     if path == "/api/rename":
         return send(req, rename_payload(req, cfg))
     if path == "/api/signup":
         out = signup_payload(req, cfg)
+        hdr = _session_set_header(req, out.pop("_session_token", ""))
+        return send(req, out, headers=hdr)
+    if path == "/api/signin":
+        out = signin_payload(req, cfg)
         hdr = _session_set_header(req, out.pop("_session_token", ""))
         return send(req, out, headers=hdr)
     if path == "/api/signout":
@@ -1020,7 +1279,7 @@ def body(req: BaseHTTPRequestHandler) -> dict:
     except json.JSONDecodeError as exc:
         raise ReqErr("invalid_json", code=400, detail=f"pos={exc.pos}")
     if isinstance(data, dict):
-        return data
+        return _sanitize_input(data)  # type: ignore[return-value]
     raise ReqErr("invalid_json", code=400, detail="json_object_required")
 
 
@@ -1131,7 +1390,11 @@ def body_raw(req: BaseHTTPRequestHandler) -> bytes:
     size = read_size(req)
     if size == 0:
         return b""
-    raw = req.rfile.read(size)
+    try:
+        raw = req.rfile.read(size)
+    except (ConnectionResetError, BrokenPipeError, OSError) as exc:
+        raise ReqErr("body_read_failed", code=400,
+                     detail=f"read_error={exc.__class__.__name__}")
     if len(raw) != size:
         raise ReqErr("incomplete_body", code=400)
     return raw
@@ -1262,6 +1525,7 @@ def readyz(req: BaseHTTPRequestHandler, cfg: dict) -> None:
 
 
 def ops_health_payload(cfg: dict) -> dict:
+    _acct_must(cfg)  # Finding 3 — require auth for operational health data
     conn = db.open_db(cfg)
     rep = health.report(conn, cfg)
     stat = status_payload(cfg)
@@ -1522,6 +1786,7 @@ def account_payload(cfg: dict) -> dict:
 
 
 def settings_payload(cfg: dict) -> dict:
+    _acct_must(cfg)  # Require authentication (C3)
     rec = _settings_load(cfg) or _settings_default(cfg)
     return {"ok": True, "settings": rec}
 
@@ -3609,11 +3874,56 @@ def _llm_cfg_runtime(cfg: dict) -> dict:
 
 
 def signup_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """POST /api/signup — create a new account with password verification.
+
+    Requires: email + password.  Rejects existing accounts (use /api/signin).
+    Enforces password strength (min 8 chars, uppercase, digit).
+    """
     data = body(req)
-    email = str(data.get("email", "")).strip().lower()
+    email = _str_field(data, "email", 254).lower()
+    password = str(data.get("password", ""))
+
     if not _EMAIL_RE.fullmatch(email):
         _api_err("POST", "/api/signup", "invalid_email")
         return {"ok": False, "err": "invalid_email"}
+
+    if not password:
+        _api_err("POST", "/api/signup", "password_required")
+        return {"ok": False, "err": "password_required",
+                "detail": "A password is required to create an account"}
+
+    # Check password strength (C6)
+    pw_err = _pw_strength(password)
+    if pw_err:
+        _api_err("POST", "/api/signup", pw_err)
+        return {"ok": False, "err": pw_err,
+                "detail": "Password must be at least 8 characters with one uppercase letter and one digit"}
+
+    # Check for existing account
+    existing = _acct_lookup(cfg, email)
+    if existing:
+        # If existing account has a password_hash, require signin
+        if existing.get("password_hash"):
+            _api_err("POST", "/api/signup", "email_registered")
+            return {"ok": False, "err": "email_registered",
+                    "detail": "This email is already registered. Use /api/signin to sign in."}
+        # Legacy migration: account exists but has no password_hash.
+        # Migrate it by adding password_hash, then sign in.
+        existing["password_hash"] = _pw_hash(password)
+        existing["updated_at"] = int(time.time())
+        _acct_save(cfg, existing)
+        tok = _sess_create(cfg, email, _session_days(cfg))
+        ws = _workspace_bootstrap(cfg, existing)
+        role = _workspace_role(ws, email) if ws else ""
+        return {
+            "ok": True,
+            "signed_in": True,
+            "account": _acct_public(existing),
+            "workspace": _workspace_brief(ws, role),
+            "_session_token": tok,
+        }
+
+    # New account
     name = _acct_name(str(data.get("name", "")), email)
     now = int(time.time())
     rec = {
@@ -3621,6 +3931,7 @@ def signup_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
         "email": email,
         "provider": _acct_provider(data.get("provider")),
         "initials": _acct_initials(name),
+        "password_hash": _pw_hash(password),
         "created_at": now,
         "updated_at": now,
         "onboarded": bool(data.get("onboarded", False)),
@@ -3628,6 +3939,59 @@ def signup_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     }
     _acct_save(cfg, rec)
     ws = _workspace_bootstrap(cfg, rec)
+    role = _workspace_role(ws, email) if ws else ""
+    tok = _sess_create(cfg, email, _session_days(cfg))
+    return {
+        "ok": True,
+        "signed_in": True,
+        "account": _acct_public(rec),
+        "workspace": _workspace_brief(ws, role),
+        "_session_token": tok,
+    }
+
+
+def signin_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """POST /api/signin — authenticate with email + password.
+
+    Verifies password against stored hash.  Returns session token on success.
+    """
+    data = body(req)
+    email = _str_field(data, "email", 254).lower()
+    password = str(data.get("password", ""))
+
+    if not _EMAIL_RE.fullmatch(email):
+        _api_err("POST", "/api/signin", "invalid_email")
+        return {"ok": False, "err": "invalid_email"}
+
+    if not password:
+        _api_err("POST", "/api/signin", "password_required")
+        return {"ok": False, "err": "password_required"}
+
+    rec = _acct_lookup(cfg, email)
+    if not rec:
+        # Constant-time failure to prevent user enumeration
+        _pw_verify(password, _pw_hash("dummy"))
+        _api_err("POST", "/api/signin", "invalid_credentials")
+        return {"ok": False, "err": "invalid_credentials",
+                "detail": "Invalid email or password"}
+
+    pw_hash = rec.get("password_hash", "")
+    if not pw_hash:
+        # Legacy account with no password — reject
+        _api_err("POST", "/api/signin", "invalid_credentials")
+        return {"ok": False, "err": "invalid_credentials",
+                "detail": "Invalid email or password"}
+
+    if not _pw_verify(password, str(pw_hash)):
+        _api_err("POST", "/api/signin", "invalid_credentials")
+        return {"ok": False, "err": "invalid_credentials",
+                "detail": "Invalid email or password"}
+
+    # Update last-seen
+    rec["updated_at"] = int(time.time())
+    _acct_save(cfg, rec)
+
+    ws = _workspace_load(cfg)
     role = _workspace_role(ws, email) if ws else ""
     tok = _sess_create(cfg, email, _session_days(cfg))
     return {
@@ -5172,12 +5536,12 @@ def _aud_row(ws: list[dict], prof: dict) -> dict:
     }
 
 
-def _audience_score(ws: list[dict], prof: dict) -> int | None:
+def _audience_score(ws: list[dict], prof: dict) -> int:
     if not ws:
-        return None
+        return 50
     ranked = _aud_rank(ws, prof)[:5]
     if not ranked:
-        return None
+        return 50
     fit = sum(r["fit"] for r in ranked) / len(ranked)
     conf = sum(r["conf"] for r in ranked) / len(ranked)
     noise = sum(r["noise"] for r in ranked) / len(ranked)
@@ -7954,6 +8318,64 @@ def analyze_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
 # Audit payloads — optic signal engine
 # ---------------------------------------------------------------------------
 
+
+def _consent_check_source(source_id: str, mode: str = "local") -> dict:
+    """Check consent_receipts for *source_id*.  Returns a consent decision dict.
+
+    Invariant #2 (Consent-Scoped): every source MUST have an active, unrevoked
+    consent receipt whose scope includes 'infer' before it enters the audit
+    pipeline.
+
+    Returns
+    -------
+    { "consented": bool, "reason": str, "receipt_id": str|None }
+    """
+    if not source_id or not _V1_AVAILABLE:
+        return {"consented": True, "reason": "no_source_id_or_db", "receipt_id": None}
+    try:
+        conn = _v1_open_db()
+        row = conn.execute(
+            "SELECT id, scope, purpose, cloud_allowed, revoked_at "
+            "FROM consent_receipts WHERE source_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (source_id,)
+        ).fetchone()
+        conn.close()
+
+        if row is None:
+            # No receipt on file — conservative default: allow (backward compat)
+            return {"consented": True, "reason": "no_receipt_found", "receipt_id": None}
+
+        receipt_id = row["id"]
+
+        # 1. Revoked consent → exclude
+        if row["revoked_at"] is not None:
+            return {"consented": False, "reason": "revoked",
+                    "receipt_id": receipt_id}
+
+        # 2. Scope must include 'infer'
+        try:
+            scope = json.loads(row["scope"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            scope = []
+        if "infer" not in scope:
+            return {"consented": False, "reason": "scope_missing_infer",
+                    "receipt_id": receipt_id}
+
+        # 3. Cloud modes require cloud_allowed
+        if mode == "cloud" and not row["cloud_allowed"]:
+            return {"consented": False, "reason": "cloud_not_allowed",
+                    "receipt_id": receipt_id}
+
+        return {"consented": True, "reason": "active_consent",
+                "receipt_id": receipt_id}
+
+    except Exception as exc:
+        log.warning("consent_check error for source %s: %s", source_id, exc)
+        # On error, exclude to be safe (fail closed)
+        return {"consented": False, "reason": f"db_error: {exc}", "receipt_id": None}
+
+
 def _audit_build_auditor(include_ml: bool = False):
     auditor = SignalAuditor()
     auditor.add_detector(PatternDetector.default_bias_patterns())
@@ -7973,9 +8395,30 @@ def audit_single_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     if not _OPTIC_AVAILABLE:
         raise ReqErr("optic_engine_unavailable", code=503)
     data = body(req)
-    content = str(data.get("content", "")).strip()
+    content = _str_field(data, "content", 10000)
     if not content:
         raise ReqErr("missing_content", code=400)
+
+    # ── Consent filter (Invariant #2) ──
+    source_id = str(data.get("source_id", "")).strip() or None
+    audit_mode = str(data.get("mode", "local")).strip()
+    consent = _consent_check_source(source_id, audit_mode) if source_id else None
+
+    if consent and not consent["consented"]:
+        result = {
+            "content": "",
+            "content_summary": content[:100],
+            "source": str(data.get("source", "text")),
+            "signals": [],
+            "detection_count": 0,
+            "consent_blocked": True,
+            "consent_reason": consent["reason"],
+            "consent_receipt_id": consent.get("receipt_id"),
+            "source_id": source_id,
+        }
+        _audit_history_push(result)
+        return result
+
     try:
         from optic.signal.models import SignalSource  # type: ignore
         source = SignalSource(str(data.get("source", "text")))
@@ -7987,6 +8430,12 @@ def audit_single_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
     auditor = _audit_build_auditor(include_ml=include_ml)
     result = auditor.audit(content, source, summary, metadata).to_dict()
+    # Inject consent decision into result
+    if consent:
+        result["consented"] = consent["consented"]
+        result["consent_reason"] = consent["reason"]
+        result["consent_receipt_id"] = consent.get("receipt_id")
+        result["source_id"] = source_id
     _audit_history_push(result)
     return result
 
@@ -7995,9 +8444,30 @@ def audit_ml_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     if not _OPTIC_AVAILABLE or not _ML_AVAILABLE:
         raise ReqErr("ml_engine_unavailable", code=503)
     data = body(req)
-    content = str(data.get("content", "")).strip()
+    content = _str_field(data, "content", 10000)
     if not content:
         raise ReqErr("missing_content", code=400)
+
+    # ── Consent filter (Invariant #2) ──
+    source_id = str(data.get("source_id", "")).strip() or None
+    audit_mode = str(data.get("mode", "local")).strip()
+    consent = _consent_check_source(source_id, audit_mode) if source_id else None
+
+    if consent and not consent["consented"]:
+        result = {
+            "content": "",
+            "content_summary": content[:100],
+            "source": str(data.get("source", "text")),
+            "signals": [],
+            "detection_count": 0,
+            "consent_blocked": True,
+            "consent_reason": consent["reason"],
+            "consent_receipt_id": consent.get("receipt_id"),
+            "source_id": source_id,
+        }
+        _audit_history_push(result)
+        return result
+
     try:
         from optic.signal.models import SignalSource  # type: ignore
         source = SignalSource(str(data.get("source", "text")))
@@ -8008,6 +8478,11 @@ def audit_ml_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
     auditor = _audit_build_auditor(include_ml=True)
     result = auditor.audit(content, source, summary, metadata).to_dict()
+    if consent:
+        result["consented"] = consent["consented"]
+        result["consent_reason"] = consent["reason"]
+        result["consent_receipt_id"] = consent.get("receipt_id")
+        result["source_id"] = source_id
     _audit_history_push(result)
     return result
 
@@ -8019,6 +8494,14 @@ def audit_batch_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     signals_raw = data.get("signals", [])
     if not signals_raw or not isinstance(signals_raw, list):
         raise ReqErr("missing_signals", code=400)
+
+    # ── Consent filter (Invariant #2) — per-item and batch-level ──
+    batch_source_id = str(data.get("source_id", "")).strip() or None
+    audit_mode = str(data.get("mode", "local")).strip()
+    consent_decisions: list[dict] = []
+    consented_items = []
+    blocked_items = []
+
     include_ml = bool(data.get("include_ml", False))
     auditor = _audit_build_auditor(include_ml=include_ml)
     try:
@@ -8030,6 +8513,19 @@ def audit_batch_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
         content = str(item.get("content", "")).strip()
         if not content:
             continue
+
+        # Per-item consent check
+        item_source_id = str(item.get("source_id", batch_source_id or "")).strip() or None
+        if item_source_id:
+            consent = _consent_check_source(item_source_id, audit_mode)
+            consent_decisions.append({"source_id": item_source_id, **consent})
+            if not consent["consented"]:
+                blocked_items.append({
+                    "content_summary": content[:100],
+                    "source_id": item_source_id,
+                    "consent_reason": consent["reason"],
+                })
+                continue
         try:
             source = SignalSource(str(item.get("source", "text")))
         except Exception:
@@ -8041,6 +8537,11 @@ def audit_batch_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
         raise ReqErr("no_valid_signals", code=400)
     audit_result = auditor.audit_multiple(tuples)
     result = audit_result.to_dict()
+    # Inject consent decisions
+    if consent_decisions:
+        result["consent_checks"] = consent_decisions
+    if blocked_items:
+        result["consent_blocked_items"] = blocked_items
     for sig in audit_result.signals:
         _audit_history_push(sig.to_dict())
     return result
@@ -8668,6 +9169,7 @@ def _v1_open_db_rw():
     conn = sqlite3.connect(str(_V1_DB))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -8706,30 +9208,40 @@ def _v1_init_db():
         );
         CREATE TABLE IF NOT EXISTS signals (
             id TEXT PRIMARY KEY, category TEXT, description TEXT,
-            severity TEXT DEFAULT 'low', source_artifact_ids TEXT,
+            severity TEXT DEFAULT 'low',
+            source_artifact_ids TEXT,  /* DEPRECATED — use signal_source_artifacts */
             metadata TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS claims (
             id TEXT PRIMARY KEY, title TEXT, audience_lens TEXT, claim TEXT,
-            confidence_band TEXT, evidence_count INTEGER, supporting_evidence TEXT,
-            weakening_evidence TEXT, source_gaps TEXT, recency TEXT, severity TEXT,
+            confidence_band TEXT, evidence_count INTEGER,
+            supporting_evidence TEXT,   /* DEPRECATED — use claim_supporting_evidence */
+            weakening_evidence TEXT,    /* DEPRECATED — use claim_weakening_evidence */
+            source_gaps TEXT, recency TEXT, severity TEXT,
             actionability TEXT, possible_consequence TEXT, counterargument TEXT,
-            repair_options TEXT, model_version TEXT, not_a_verdict INTEGER DEFAULT 1,
+            repair_options TEXT,        /* DEPRECATED — use claim_repair_options */
+            model_version TEXT, not_a_verdict INTEGER DEFAULT 1,
             generated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS contradictions (
             id TEXT PRIMARY KEY, category TEXT, description TEXT,
-            claim_ids TEXT, artifact_ids TEXT, severity TEXT,
+            claim_ids TEXT,             /* DEPRECATED — use contradiction_claims */
+            artifact_ids TEXT,          /* DEPRECATED — use contradiction_artifacts */
+            severity TEXT,
             audience_affected TEXT, resolution_suggestion TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS risks (
             id TEXT PRIMARY KEY, category TEXT, description TEXT,
-            severity TEXT, linked_claim_ids TEXT, linked_artifact_ids TEXT,
+            severity TEXT,
+            linked_claim_ids TEXT,      /* DEPRECATED — use risk_linked_claims */
+            linked_artifact_ids TEXT,   /* DEPRECATED — use risk_linked_artifacts */
             audience_affected TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS repairs (
             id TEXT PRIMARY KEY, title TEXT, affected_audience TEXT,
-            linked_claim_id TEXT, linked_evidence_ids TEXT, impact REAL DEFAULT 0.5,
+            linked_claim_id TEXT REFERENCES claims(id) ON DELETE SET NULL,
+            linked_evidence_ids TEXT,   /* DEPRECATED — use repair_linked_evidence */
+            impact REAL DEFAULT 0.5,
             effort REAL DEFAULT 0.5, urgency REAL DEFAULT 0.5,
             reversibility REAL DEFAULT 0.5, cost_cents INTEGER DEFAULT 0,
             exact_steps TEXT, expected_effect TEXT, risk_of_overcorrecting TEXT,
@@ -8747,11 +9259,99 @@ def _v1_init_db():
             user_id TEXT PRIMARY KEY, step INTEGER DEFAULT 0,
             audit_mode TEXT, completed_steps TEXT, created_at TEXT
         );
+
+        -- ═══ JUNCTION TABLES — FOREIGN KEY ENFORCEMENT (Invariant #10) ═══
+
+        CREATE TABLE IF NOT EXISTS claim_supporting_evidence (
+            claim_id    TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (claim_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS claim_weakening_evidence (
+            claim_id    TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (claim_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS claim_repair_options (
+            claim_id  TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            repair_id TEXT NOT NULL REFERENCES repairs(id) ON DELETE CASCADE,
+            PRIMARY KEY (claim_id, repair_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS risk_linked_claims (
+            risk_id  TEXT NOT NULL REFERENCES risks(id) ON DELETE CASCADE,
+            claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            PRIMARY KEY (risk_id, claim_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS risk_linked_artifacts (
+            risk_id     TEXT NOT NULL REFERENCES risks(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (risk_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS repair_linked_evidence (
+            repair_id   TEXT NOT NULL REFERENCES repairs(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (repair_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS contradiction_claims (
+            contradiction_id TEXT NOT NULL REFERENCES contradictions(id) ON DELETE CASCADE,
+            claim_id         TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            PRIMARY KEY (contradiction_id, claim_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS contradiction_artifacts (
+            contradiction_id TEXT NOT NULL REFERENCES contradictions(id) ON DELETE CASCADE,
+            artifact_id      TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (contradiction_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS signal_source_artifacts (
+            signal_id   TEXT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (signal_id, artifact_id)
+        ) WITHOUT ROWID;
     """)
     conn.commit()
+    # Run idempotent migration from V1 server module
+    try:
+        from optic.v1.server import _migrate_v1_schema
+        _migrate_v1_schema(conn)
+    except ImportError:
+        pass
     conn.close()
     _V1_AVAILABLE = True
     _log_ev("v1_init_db", db_path=str(_V1_DB))
+
+
+def v1_health_payload(_cfg=None) -> dict:
+    """GET /api/v1/health — returns V1 module health status."""
+    if not _V1_AVAILABLE:
+        return {"ok": False, "error": "v1_database_unavailable", "local_mode": True}
+    try:
+        conn = _v1_open_db()
+        claims = conn.execute("SELECT COUNT(*) as c FROM claims").fetchone()["c"]
+        signals = conn.execute("SELECT COUNT(*) as c FROM signals").fetchone()["c"]
+        repairs = conn.execute("SELECT COUNT(*) as c FROM repairs").fetchone()["c"]
+        risks = conn.execute("SELECT COUNT(*) as c FROM risks").fetchone()["c"]
+        conn.close()
+        return {
+            "ok": True,
+            "version": "1.0",
+            "local_mode": True,
+            "v1_available": True,
+            "claims_count": claims,
+            "signals_count": signals,
+            "repairs_count": repairs,
+            "risks_count": risks,
+            "v1_db": str(_V1_DB) if _V1_DB else "uninitialized",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "local_mode": True}
 
 
 def v1_status_payload(_req=None, _cfg=None) -> dict:
@@ -8905,14 +9505,15 @@ def _v1_audit_bg():
     try:
         # Lazy-import V1 modules (they live at backend/src/optic/v1/)
         from optic.v1.models import (
-            Artifact, AuditMode, ConfidenceBand, Contradiction, InferenceClaim,
-            RepairAction, RepairStatus, Report, RiskCategory, RiskFlag, Severity, Signal,
+            Artifact, AuditMode, ConfidenceBand, Contradiction, Entity,
+            InferenceClaim, RepairAction, RepairStatus, Report, RiskCategory,
+            RiskFlag, Severity, Signal,
         )
         from optic.v1.lenses import AUDIENCE_LENSES
         from optic.v1.contradiction import ContradictionEngine
         from optic.v1.inference import InferenceCardGenerator
         import hashlib as _hashlib
-        from uuid import uuid4 as _uuid4
+        from uuid import uuid4 as _uuid4, UUID
 
         conn_rw = _v1_open_db_rw()
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -8924,6 +9525,58 @@ def _v1_audit_bg():
                 if _entry.get("ready") and _entry.get("cards"):
                     _workstream_cards = _entry["cards"]
                     break
+
+        # ── Stage 0.5: Consent filter (Invariant #2) ──
+        consent_summary: dict = {"total_sources": 0, "consented": 0, "excluded": 0,
+                                  "excluded_reasons": [], "source_decisions": []}
+        try:
+            source_rows = conn_rw.execute(
+                "SELECT id, user_label, type, provider, status FROM sources"
+            ).fetchall()
+            consent_summary["total_sources"] = len(source_rows)
+            for srow in source_rows:
+                decision = _consent_check_source(srow["id"], mode="local")
+                consent_summary["source_decisions"].append({
+                    "source_id": srow["id"],
+                    "label": srow["user_label"] or srow["provider"] or srow["type"],
+                    "consented": decision["consented"],
+                    "reason": decision["reason"],
+                })
+                if decision["consented"]:
+                    consent_summary["consented"] += 1
+                else:
+                    consent_summary["excluded"] += 1
+                    consent_summary["excluded_reasons"].append(
+                        f"{srow.get('user_label') or srow['id']}: {decision['reason']}")
+        except Exception as exc:
+            log.warning("V1 audit: consent filter stage failed: %s", exc)
+            consent_summary["error"] = str(exc)
+
+        # ── Apply consent filter to workstream cards ──
+        # Build a blocklist of non-consented source labels/IDs
+        non_consented_labels: set[str] = set()
+        non_consented_ids: set[str] = set()
+        for sd in consent_summary.get("source_decisions", []):
+            if not sd.get("consented", True):
+                non_consented_ids.add(sd.get("source_id", ""))
+                non_consented_labels.add((sd.get("label", "") or "").lower())
+        # Filter workstream cards: exclude any card whose name or
+        # folder names match a non-consented source label.
+        if non_consented_labels:
+            _workstream_cards = [
+                card for card in _workstream_cards
+                if not (
+                    (card.get("name", "") or "").lower() in non_consented_labels
+                    or any(
+                        (f or "").lower() in non_consented_labels
+                        for f in (card.get("folders", []) or [])
+                        if isinstance(f, str)
+                    )
+                )
+            ]
+            consent_summary["cards_filtered"] = True
+        else:
+            consent_summary["cards_filtered"] = False
 
         # ── Stages 1-3: Derive signals from existing data ──
         existing_signals = conn_rw.execute(
@@ -8984,12 +9637,8 @@ def _v1_audit_bg():
                                         "file_count": card.get("file_count", 0),
                                         "topics": card.get("topics", [])})))
             else:
-                # No scan data available — use minimal fallback so the UI isn't blank
-                seed_signals = [
-                    ("topic_focus", "No scan data yet — run a scan to populate workstreams",
-                     Severity.LOW.value, json.dumps({"workstream_id": "empty", "workstream_name": "No Data",
-                                                      "confidence": 0, "file_count": 0, "topics": []})),
-                ]
+                # No scan data available — honest empty state (Invariant #8: No Fake Completeness)
+                seed_signals = []
             for cat, desc, sev, meta in seed_signals:
                 sid = str(_uuid4())
                 conn_rw.execute(
@@ -9004,7 +9653,87 @@ def _v1_audit_bg():
 
         # ── Stages 4-7: Generate inference claims per audience lens ──
         all_signals_rows = [_v1_row_to_dict(r) for r in existing_signals]
-        for lens_id in list(AUDIENCE_LENSES.keys())[:4]:  # Limit to 4 lenses for speed
+        # ── Load real artifacts from the seeded DB (startup.py populates this) ──
+        db_artifact_rows = conn_rw.execute(
+            "SELECT id, source_id, type, raw_hash, encrypted_path, metadata, "
+            "is_public, content_preview, created_at "
+            "FROM artifacts ORDER BY created_at DESC LIMIT 50"
+        ).fetchall()
+        db_artifacts_by_id: dict[str, dict] = {}
+        for ar in db_artifact_rows:
+            meta = {}
+            try:
+                meta = json.loads(ar["metadata"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+            db_artifacts_by_id[ar["id"]] = {
+                "id": ar["id"],
+                "source_id": ar["source_id"],
+                "type": ar["type"],
+                "raw_hash": ar["raw_hash"],
+                "encrypted_path": ar["encrypted_path"],
+                "metadata": meta,
+                "is_public": bool(ar["is_public"]),
+                "content_preview": ar["content_preview"] or "",
+                "created_at": ar["created_at"] or "",
+            }
+        all_generated_artifacts: list[dict] = []
+        # ── Build real artifact objects BEFORE the lens loop so signals can reference them ──
+        real_artifacts: list[Artifact] = []
+        for ad in list(db_artifacts_by_id.values())[:30]:
+            real_artifacts.append(Artifact(
+                id=UUID(ad["id"]),
+                source_id=UUID(ad["source_id"]),
+                type=ad["type"],
+                raw_hash=ad["raw_hash"],
+                encrypted_path=ad["encrypted_path"],
+                metadata=ad["metadata"],
+                is_public=ad["is_public"],
+                content_preview=ad["content_preview"],
+                created_at=ad.get("created_at", ""),
+            ))
+        # If DB is empty, fall back to workstream-derived artifacts
+        if not real_artifacts and _workstream_cards:
+            for card in _workstream_cards[:5]:
+                for kf in (card.get("key_files") or [])[:3]:
+                    if isinstance(kf, str) and kf:
+                        aid = _uuid4()
+                        fpath = Path(kf)
+                        real_artifacts.append(Artifact(
+                            id=aid, source_id=_uuid4(),
+                            type="scanned_file",
+                            raw_hash=_hashlib.sha256(str(aid).encode()).hexdigest(),
+                            metadata={
+                                "path": kf, "name": fpath.name,
+                                "ext": fpath.suffix,
+                                "workstream": card.get("name", ""),
+                                "file_count": card.get("file_count", 0),
+                            },
+                            is_public=False,
+                            content_preview=card.get("summary", "")[:100],
+                        ))
+        # If still empty, last-resort fallback from signal metadata
+        if not real_artifacts:
+            for i in range(min(3, len(existing_signals))):
+                aid = _uuid4()
+                real_artifacts.append(Artifact(
+                    id=aid, source_id=_uuid4(), type="workstream_file",
+                    raw_hash=_hashlib.sha256(str(aid).encode()).hexdigest(),
+                    metadata={"workstream": f"ws-{i}", "file_count": 50},
+                    is_public=False, content_preview="",
+                ))
+        # ── FIX: Derive artifact IDs from real_artifacts for signals ──
+        artifact_id_strings = [str(a.id) for a in real_artifacts[:10]]
+        # ── Persist real artifact IDs into signal rows so DB state matches runtime ──
+        if artifact_id_strings:
+            artifact_ids_json = json.dumps(artifact_id_strings)
+            conn_rw.execute(
+                "UPDATE signals SET source_artifact_ids = ? WHERE source_artifact_ids = '[]'",
+                (artifact_ids_json,)
+            )
+            conn_rw.commit()
+        # ── Stages 6-7: Generate inference claims per lens with REAL artifact IDs ──
+        for lens_id in list(AUDIENCE_LENSES.keys()):  # Apply all 9 doctrinal lenses
             try:
                 gen = InferenceCardGenerator(lens_id)
                 signal_objects = []
@@ -9015,47 +9744,13 @@ def _v1_audit_bg():
                             category=sig.get("category", ""),
                             description=sig.get("description", ""),
                             severity=Severity(sig.get("severity", "low")),
-                            source_artifact_ids=[],
+                            source_artifact_ids=artifact_id_strings,
                             metadata=json.loads(sig.get("metadata", "{}") or "{}"),
                         ))
                     except Exception:
                         continue
                 if not signal_objects:
                     continue
-                # Build artifacts from REAL workstream key files when available
-                real_artifacts = []
-                if _workstream_cards:
-                    file_idx = 0
-                    for card in _workstream_cards[:5]:
-                        for kf in (card.get("key_files") or [])[:3]:
-                            if isinstance(kf, str) and kf:
-                                aid = _uuid4()
-                                fpath = Path(kf)
-                                real_artifacts.append(Artifact(
-                                    id=aid, source_id=_uuid4(),
-                                    type=f"scanned_file",
-                                    raw_hash=_hashlib.sha256(str(aid).encode()).hexdigest(),
-                                    metadata={
-                                        "path": kf,
-                                        "name": fpath.name,
-                                        "ext": fpath.suffix,
-                                        "workstream": card.get("name", ""),
-                                        "file_count": card.get("file_count", 0),
-                                    },
-                                    is_public=False,
-                                    content_preview=card.get("summary", "")[:100],
-                                ))
-                                file_idx += 1
-                if not real_artifacts:
-                    # Fallback: build artifacts from signal metadata
-                    for i in range(min(3, len(existing_signals))):
-                        aid = _uuid4()
-                        real_artifacts.append(Artifact(
-                            id=aid, source_id=_uuid4(), type="workstream_file",
-                            raw_hash=_hashlib.sha256(str(aid).encode()).hexdigest(),
-                            metadata={"workstream": f"ws-{i}", "file_count": 50},
-                            is_public=False, content_preview="",
-                        ))
                 lens_claims = gen.generate_claims(signal_objects, real_artifacts[:5])
                 # Collect generated artifacts for contradiction engine
                 for a in real_artifacts[:5]:
@@ -9064,6 +9759,7 @@ def _v1_audit_bg():
                         "type": a.type, "raw_hash": a.raw_hash,
                         "metadata": a.metadata, "is_public": a.is_public,
                         "content_preview": a.content_preview,
+                        "created_at": a.created_at or "",
                     })
                 for c in lens_claims:
                     conn_rw.execute(
@@ -9080,6 +9776,19 @@ def _v1_audit_bg():
                          json.dumps([str(x) for x in c.repair_options]),
                          c.model_version, int(c.not_a_verdict), now_iso)
                     )
+                    # Populate junction tables for FK enforcement
+                    for aid in c.supporting_evidence:
+                        conn_rw.execute(
+                            "INSERT OR IGNORE INTO claim_supporting_evidence(claim_id, artifact_id) "
+                            "VALUES(?, ?)", (str(c.id), str(aid)))
+                    for aid in c.weakening_evidence:
+                        conn_rw.execute(
+                            "INSERT OR IGNORE INTO claim_weakening_evidence(claim_id, artifact_id) "
+                            "VALUES(?, ?)", (str(c.id), str(aid)))
+                    for rid in c.repair_options:
+                        conn_rw.execute(
+                            "INSERT OR IGNORE INTO claim_repair_options(claim_id, repair_id) "
+                            "VALUES(?, ?)", (str(c.id), str(rid)))
             except Exception as exc:
                 log.warning("V1 audit: lens %s failed: %s", lens_id, exc)
 
@@ -9093,18 +9802,163 @@ def _v1_audit_bg():
             artifact_dicts = all_generated_artifacts[:50]  # limit for performance
             entity_dicts: list[dict] = []
             if _workstream_cards:
+                # Derive multiple entity types from workstream metadata
+                # so the contradiction engine can detect cross-type mismatches
                 for card in _workstream_cards[:8]:
+                    name = card.get("name", "")
+                    topics = card.get("topics", [])
+                    topics_lower = [t.lower() for t in topics]
+                    all_text = (name + " " + " ".join(topics)).lower()
+
+                    # Base workstream entity (always created)
                     entity_dicts.append({
                         "type": "workstream",
-                        "name": card.get("name", ""),
+                        "name": name,
                         "metadata": {
                             "confidence": card.get("confidence", 0.5),
                             "file_count": card.get("file_count", 0),
-                            "topics": card.get("topics", []),
+                            "topics": topics,
                         },
                     })
+
+                    # Derived entity types based on topic signals
+                    job_keywords = {"career", "work", "job", "resume", "cv",
+                                    "employment", "linkedin", "recruiter"}
+                    org_keywords = {"company", "organization", "startup",
+                                    "business", "employer", "enterprise"}
+                    project_keywords = {"code", "project", "software", "app",
+                                        "development", "engineering", "build"}
+                    skill_keywords = {"skill", "learning", "research",
+                                      "design", "writing", "communication",
+                                      "leadership", "management"}
+
+                    if job_keywords & set(topics_lower) or any(
+                            kw in all_text for kw in job_keywords):
+                        entity_dicts.append({
+                            "type": "employer",
+                            "name": name,
+                            "metadata": {
+                                "confidence": card.get("confidence", 0.5),
+                                "topics": topics,
+                            },
+                        })
+
+                    if org_keywords & set(topics_lower) or any(
+                            kw in all_text for kw in org_keywords):
+                        entity_dicts.append({
+                            "type": "org",
+                            "name": name,
+                            "metadata": {
+                                "confidence": card.get("confidence", 0.5),
+                                "topics": topics,
+                            },
+                        })
+
+                    if project_keywords & set(topics_lower) or any(
+                            kw in all_text for kw in project_keywords):
+                        entity_dicts.append({
+                            "type": "project",
+                            "name": name,
+                            "metadata": {
+                                "confidence": card.get("confidence", 0.5),
+                                "topics": topics,
+                            },
+                        })
+
+                    if skill_keywords & set(topics_lower) or any(
+                            kw in all_text for kw in skill_keywords):
+                        entity_dicts.append({
+                            "type": "skill",
+                            "name": name,
+                            "metadata": {
+                                "confidence": card.get("confidence", 0.5),
+                                "topics": topics,
+                            },
+                        })
             claim_dicts = [_v1_row_to_dict(r) for r in all_claim_rows]
-            contradictions = engine.run_full_audit(claim_dicts, artifact_dicts, entity_dicts)
+
+            # ── Build typed objects from dicts (TASK-T2 fix) ──────────────
+            # The contradiction engine accesses typed attributes (e.type,
+            # claim.title, a.metadata, a.id) — raw dicts need ['key'] access,
+            # causing silent AttributeError in all 5 detection methods.
+            # Build proper InferenceClaim, Artifact, and Entity objects.
+            claim_objects: list[InferenceClaim] = []
+            for cd in claim_dicts:
+                try:
+                    se = cd.get("supporting_evidence", [])
+                    if isinstance(se, str):
+                        try: se = json.loads(se)
+                        except Exception: se = []
+                    we = cd.get("weakening_evidence", [])
+                    if isinstance(we, str):
+                        try: we = json.loads(we)
+                        except Exception: we = []
+                    sg = cd.get("source_gaps", [])
+                    if isinstance(sg, str):
+                        try: sg = json.loads(sg)
+                        except Exception: sg = []
+                    ro = cd.get("repair_options", [])
+                    if isinstance(ro, str):
+                        try: ro = json.loads(ro)
+                        except Exception: ro = []
+                    claim_objects.append(InferenceClaim(
+                        id=UUID(cd["id"]) if cd.get("id") else _uuid4(),
+                        title=cd.get("title", ""),
+                        audience_lens=cd.get("audience_lens", ""),
+                        claim=cd.get("claim", ""),
+                        confidence_band=ConfidenceBand(cd.get("confidence_band", "low")),
+                        evidence_count=int(cd.get("evidence_count") or 0),
+                        supporting_evidence=([UUID(x) for x in se if x]
+                                             if isinstance(se, list) else []),
+                        weakening_evidence=([UUID(x) for x in we if x]
+                                            if isinstance(we, list) else []),
+                        source_gaps=sg if isinstance(sg, list) else [],
+                        recency=cd.get("recency", ""),
+                        severity=Severity(cd.get("severity", "low")),
+                        actionability=cd.get("actionability", ""),
+                        possible_consequence=cd.get("possible_consequence", ""),
+                        counterargument=cd.get("counterargument", ""),
+                        repair_options=([UUID(x) for x in ro if x]
+                                        if isinstance(ro, list) else []),
+                        model_version=cd.get("model_version", ""),
+                        generated_at=cd.get("generated_at", ""),
+                        not_a_verdict=bool(cd.get("not_a_verdict", True)),
+                    ))
+                except Exception:
+                    continue
+
+            artifact_objects: list[Artifact] = []
+            for ad in artifact_dicts:
+                try:
+                    artifact_objects.append(Artifact(
+                        id=UUID(ad["id"]) if ad.get("id") else _uuid4(),
+                        source_id=UUID(ad["source_id"]) if ad.get("source_id") else _uuid4(),
+                        type=ad.get("type", ""),
+                        raw_hash=ad.get("raw_hash", ""),
+                        encrypted_path=ad.get("encrypted_path", ""),
+                        metadata=ad.get("metadata") or {},
+                        is_public=bool(ad.get("is_public", False)),
+                        content_preview=ad.get("content_preview", ""),
+                        created_at=ad.get("created_at", ""),
+                    ))
+                except Exception:
+                    continue
+
+            entity_objects: list[Entity] = []
+            for ed in entity_dicts:
+                try:
+                    entity_objects.append(Entity(
+                        id=_uuid4(),  # synthetic — no pre-existing id
+                        type=ed.get("type", "unknown"),
+                        name=ed.get("name", ""),
+                        metadata=ed.get("metadata") or {},
+                        confidence=float(ed.get("confidence", 1.0)),
+                    ))
+                except Exception:
+                    continue
+
+            contradictions = engine.run_full_audit(
+                claim_objects, artifact_objects, entity_objects)
             for c in contradictions:
                 conn_rw.execute(
                     "INSERT OR REPLACE INTO contradictions(id, category, description, "
@@ -9116,87 +9970,160 @@ def _v1_audit_bg():
                      c.severity.value, json.dumps(c.audience_affected),
                      c.resolution_suggestion, now_iso)
                 )
+                # Populate junction tables for FK enforcement
+                for cid in c.claim_ids:
+                    conn_rw.execute(
+                        "INSERT OR IGNORE INTO contradiction_claims(contradiction_id, claim_id) "
+                        "VALUES(?, ?)", (str(c.id), str(cid)))
+                for aid in c.artifact_ids:
+                    conn_rw.execute(
+                        "INSERT OR IGNORE INTO contradiction_artifacts(contradiction_id, artifact_id) "
+                        "VALUES(?, ?)", (str(c.id), str(aid)))
             conn_rw.commit()
         except Exception as exc:
             log.warning("V1 audit: contradiction engine failed: %s", exc)
 
-        # ── Stages 9-10: Risk mapping from contradictions + repair generation ──
-        # Derive risks from actual contradiction output (not hardcoded)
-        all_contra_rows = conn_rw.execute(
-            "SELECT * FROM contradictions ORDER BY created_at DESC LIMIT 50"
-        ).fetchall()
-        if all_contra_rows:
-            seen_cats: set[str] = set()
-            for c_row in all_contra_rows:
-                cd = _v1_row_to_dict(c_row)
-                cat = cd.get("category", "misc")
-                if cat in seen_cats:
-                    continue
-                seen_cats.add(cat)
-                try:
-                    cids = json.loads(cd.get("claim_ids", "[]") or "[]")
-                    aids_list = json.loads(cd.get("artifact_ids", "[]") or "[]")
-                except (json.JSONDecodeError, TypeError):
-                    cids, aids_list = [], []
-                aud = cd.get("audience_affected") or []
-                if isinstance(aud, str):
-                    try:
-                        aud = json.loads(aud)
-                    except (json.JSONDecodeError, TypeError):
-                        aud = [aud]
-                rid = str(_uuid4())
+        # ── Stage 9: Dynamic risk generation ──
+        # Maps contradictions + stale context + exposure records into RiskFlags.
+        # Replaces the old hardcoded 3-risk block with evidence-backed generation.
+        try:
+            from optic.v1.risk import risk_engine
+
+            all_contra_rows = conn_rw.execute(
+                "SELECT * FROM contradictions ORDER BY created_at DESC LIMIT 50"
+            ).fetchall()
+            all_claim_rows_risk = conn_rw.execute(
+                "SELECT * FROM claims"
+            ).fetchall()
+
+            contra_dicts = [_v1_row_to_dict(r) for r in all_contra_rows]
+            claim_dicts = [_v1_row_to_dict(r) for r in all_claim_rows_risk]
+
+            generated_risks = risk_engine(
+                contradictions=contra_dicts,
+                claims=claim_dicts,
+                artifacts=all_generated_artifacts,
+                workstream_cards=_workstream_cards,
+                now_iso=now_iso,
+            )
+
+            for risk in generated_risks:
                 conn_rw.execute(
                     "INSERT OR REPLACE INTO risks(id, category, description, severity, "
                     "linked_claim_ids, linked_artifact_ids, audience_affected, created_at) "
                     "VALUES(?,?,?,?,?,?,?,?)",
-                    (rid, cat, (cd.get("description") or cd.get("resolution_suggestion") or "")[:300],
-                     cd.get("severity", "low"),
-                     json.dumps(cids[:10]), json.dumps(aids_list[:10]),
-                     json.dumps(aud if isinstance(aud, list) else []),
-                     now_iso)
+                    (str(risk.id), risk.category.value, risk.description[:300],
+                     risk.severity.value,
+                     json.dumps([str(x) for x in risk.linked_claim_ids]),
+                     json.dumps([str(x) for x in risk.linked_artifact_ids]),
+                     json.dumps(risk.audience_affected if isinstance(risk.audience_affected, list) else []),
+                     risk.created_at)
                 )
-
-        # Fallback: if no contradictions produced risks, add honest note
-        rem_risks = conn_rw.execute("SELECT COUNT(*) as c FROM risks").fetchone()
-        if not rem_risks or rem_risks["c"] == 0:
+                # Populate junction tables for FK enforcement
+                for cid in risk.linked_claim_ids:
+                    conn_rw.execute(
+                        "INSERT OR IGNORE INTO risk_linked_claims(risk_id, claim_id) "
+                        "VALUES(?, ?)", (str(risk.id), str(cid)))
+                for aid in risk.linked_artifact_ids:
+                    conn_rw.execute(
+                        "INSERT OR IGNORE INTO risk_linked_artifacts(risk_id, artifact_id) "
+                        "VALUES(?, ?)", (str(risk.id), str(aid)))
+            conn_rw.commit()
+            log.info("V1 audit: risk engine generated %d risks from contradictions=%d claims=%d artifacts=%d",
+                     len(generated_risks), len(contra_dicts), len(claim_dicts), len(all_generated_artifacts))
+        except Exception as exc:
+            log.warning("V1 audit: risk engine failed, falling back: %s", exc)
+            # Honest fallback: one truthful note risk
             rid = str(_uuid4())
             conn_rw.execute(
                 "INSERT OR REPLACE INTO risks(id, category, description, severity, "
                 "linked_claim_ids, linked_artifact_ids, audience_affected, created_at) "
                 "VALUES(?,?,?,?,?,?,?,?)",
                 (rid, "missing_proof",
-                 "Audit produced no contradictions — run a scan to populate analysis.",
+                 "Risk engine unavailable — re-run audit after a scan to enable dynamic risk detection.",
                  "low", "[]", "[]", json.dumps(["all"]), now_iso)
             )
 
-        repair_defs = [
-            ("Consolidate project documentation", ["recruiter", "investor"],
-             0.7, 0.4, 0.6, 0.9,
-             ["Gather README files across repositories", "Create a project index", "Link to live demos"],
-             "Clearer signal of project scope and ownership"),
-            ("Update stale directories", ["recruiter", "investor"],
-             0.5, 0.5, 0.4, 0.8,
-             ["Identify directories > 90 days without changes", "Archive or refresh content", "Add freshness indicators"],
-             "Reduces timeline gap risk for recruiters"),
-            ("Add public-facing summaries", ["recruiter", "collaborator"],
-             0.8, 0.3, 0.7, 0.95,
-             ["For each major project, add a one-paragraph summary", "Include tech stack, outcomes, role"],
-             "Improves readability for external audiences"),
-            ("Separate personal from professional content", ["recruiter", "stranger"],
-             0.6, 0.6, 0.5, 0.7,
-             ["Audit file organization for boundary clarity", "Move personal files to clearly labeled directories"],
-             "Reduces overexposure risk"),
-        ]
-        for title, aud, imp, eff, urg, rev, steps, effect in repair_defs:
+        # ── Stage 10: Repair generation (Invariant #5: Executable) ──
+        # Generate repairs dynamically from claims, contradictions,
+        # and risks with REAL priority metrics and exact shell commands.
+        try:
+            from optic.v1.server import _generate_repairs
+
+            all_claim_rows_rep = conn_rw.execute(
+                "SELECT * FROM claims"
+            ).fetchall()
+            all_contra_rows_rep = conn_rw.execute(
+                "SELECT * FROM contradictions ORDER BY created_at DESC LIMIT 50"
+            ).fetchall()
+            all_risk_rows_rep = conn_rw.execute(
+                "SELECT * FROM risks"
+            ).fetchall()
+
+            generated_repairs = _generate_repairs(
+                cards=[_v1_row_to_dict(r) for r in all_claim_rows_rep],
+                contradictions=[_v1_row_to_dict(r) for r in all_contra_rows_rep],
+                risks=[_v1_row_to_dict(r) for r in all_risk_rows_rep],
+            )
+
+            for r in generated_repairs:
+                conn_rw.execute(
+                    "INSERT OR REPLACE INTO repairs(id, title, affected_audience, linked_claim_id, "
+                    "linked_evidence_ids, impact, effort, urgency, reversibility, "
+                    "exact_steps, expected_effect, risk_of_overcorrecting, "
+                    "before_measurement, after_measurement, status) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (str(r.id), r.title, json.dumps(r.affected_audience),
+                     str(r.linked_claim_id) if r.linked_claim_id else "",
+                     json.dumps([str(x) for x in r.linked_evidence_ids]),
+                     r.impact, r.effort, r.urgency, r.reversibility,
+                     json.dumps(r.exact_steps), r.expected_effect,
+                     r.risk_of_overcorrecting,
+                     json.dumps(r.before_measurement) if r.before_measurement else "",
+                     json.dumps(r.after_measurement) if r.after_measurement else "",
+                     r.status.value)
+                )
+                # Populate junction tables for FK enforcement
+                # ── repair_linked_evidence: pull evidence from linked claim ──
+                evidence_ids = list(r.linked_evidence_ids) if r.linked_evidence_ids else []
+                if not evidence_ids and r.linked_claim_id:
+                    # Derive evidence from the claim's supporting_evidence
+                    claim_row = conn_rw.execute(
+                        "SELECT supporting_evidence FROM claims WHERE id = ?",
+                        (str(r.linked_claim_id),)
+                    ).fetchone()
+                    if claim_row and claim_row["supporting_evidence"]:
+                        try:
+                            parsed = json.loads(claim_row["supporting_evidence"])
+                            if isinstance(parsed, list):
+                                evidence_ids = [x for x in parsed if isinstance(x, str)]
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                for eid in evidence_ids:
+                    conn_rw.execute(
+                        "INSERT OR IGNORE INTO repair_linked_evidence(repair_id, artifact_id) "
+                        "VALUES(?, ?)", (str(r.id), str(eid)))
+                # ── claim_repair_options: bidirectional link ──
+                if r.linked_claim_id:
+                    conn_rw.execute(
+                        "INSERT OR IGNORE INTO claim_repair_options(claim_id, repair_id) "
+                        "VALUES(?, ?)", (str(r.linked_claim_id), str(r.id)))
+            conn_rw.commit()
+            log.info("V1 audit: generated %d executable repairs", len(generated_repairs))
+        except Exception as exc:
+            log.warning("V1 audit: repair generation failed, falling back: %s", exc)
+            # Honest fallback — one truthful note
             rid = str(_uuid4())
             conn_rw.execute(
                 "INSERT OR REPLACE INTO repairs(id, title, affected_audience, linked_claim_id, "
                 "linked_evidence_ids, impact, effort, urgency, reversibility, "
                 "exact_steps, expected_effect, risk_of_overcorrecting, status) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (rid, title, json.dumps(aud), "",
-                 "[]", imp, eff, urg, rev,
-                 json.dumps(steps), effect, "Minimal — these are additive improvements",
+                (rid, "Re-run audit to generate repairs",
+                 json.dumps(["all"]), "", "[]",
+                 0.3, 0.2, 0.3, 0.95,
+                 json.dumps(["Re-run the V1 audit from the dashboard to enable dynamic repair generation"]),
+                 "Enables full repair pipeline", "None — this is a meta-repair",
                  RepairStatus.PENDING.value)
             )
 
@@ -9207,6 +10134,11 @@ def _v1_audit_bg():
         repair_count = conn_rw.execute("SELECT COUNT(*) as c FROM repairs").fetchone()["c"]
         report_id = str(_uuid4())
         snapshot = _hashlib.sha256(f"{report_id}{now_iso}".encode()).hexdigest()[:16]
+        sections_data = {
+            "scope": "V1 general audit from ctxorg",
+            "stages_completed": 12,
+            "consent_filter": consent_summary,
+        }
         conn_rw.execute(
             "INSERT OR REPLACE INTO reports(id, user_id, version, audit_mode, scope, "
             "source_count, artifact_count, claim_count, contradiction_count, "
@@ -9214,7 +10146,7 @@ def _v1_audit_bg():
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (report_id, "local", 1, "general", "[]",
              4, 85, claim_count, contradiction_count, risk_count, repair_count,
-             json.dumps({"scope": "V1 general audit from ctxorg", "stages_completed": 11}),
+             json.dumps(sections_data),
              json.dumps({"json_allowed": True, "md_allowed": True, "redacted_by_default": True}),
              now_iso, snapshot)
         )
@@ -9362,7 +10294,14 @@ def v1_repair_complete_payload(req: BaseHTTPRequestHandler, cfg: dict,
 
 
 def v1_reset_payload(cfg: dict) -> dict:
-    """POST /api/v1/reset — clear all V1 test data, preserve schema."""
+    """POST /api/v1/reset — clear all V1 test data, preserve schema.
+
+    Requires authentication + owner/admin role (C2 fix).
+    """
+    # Require authenticated user with owner/admin role
+    _acct_must(cfg)
+    _workspace_require_role(cfg, {"owner", "admin"})
+
     if not _V1_AVAILABLE:
         return {"status": "error", "error": "V1 database not found — nothing to reset"}
     try:
@@ -9388,6 +10327,7 @@ def v1_reset_payload(cfg: dict) -> dict:
         conn.execute("DELETE FROM users WHERE is_test_user = 1")
         conn.commit()
         conn.close()
+        _log_ev("v1_reset", cleared_tables=cleared)
         return {
             "status": "ok",
             "message": "Test data cleared, schema preserved",

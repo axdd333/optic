@@ -298,7 +298,7 @@ class RepairAction:
 @dataclass
 class AudienceLens:
     """Configuration for an audience viewpoint."""
-    id: str = ""  # "recruiter", "investor", "admissions", etc.
+    id: str = ""  # "recruiter", "investor", "collaborator", etc.
     name: str = ""
     icon: str = ""
     priorities: List[str] = field(default_factory=list)

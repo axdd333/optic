@@ -31,7 +31,9 @@ const el = {
   logoFallback: document.querySelector("#logoFallback"),
 };
 
-const palette = {
+// Category palette — initialized from CSS variables at boot for design-system consistency.
+// Raw hex values serve as fallback if CSS variables are unavailable.
+const _defaultPalette = {
   Documents: "#5aa7ff",
   Images: "#4bd6c6",
   Code: "#f2bd5a",
@@ -39,6 +41,7 @@ const palette = {
   System: "#7c8291",
   Other: "#b889ff",
 };
+let palette = { ..._defaultPalette };
 
 const modeTitle = {
   workstreams: "Home",
@@ -345,7 +348,8 @@ function syncTopbarPresence() {
   const txt = busy ? "Status: indexing in progress."
     : signedIn ? "Status: account connected."
       : "Status: local-only mode.";
-  dot.style.background = busy ? "#d97706" : signedIn ? "#2563eb" : "#16a34a";
+  // Use CSS variable references for consistent design tokens
+  dot.style.background = busy ? "var(--amber)" : signedIn ? "var(--blue)" : "var(--green)";
   btn.title = txt;
   btn.setAttribute("aria-label", txt);
 }
@@ -761,6 +765,14 @@ class ModeManager {
     if (!next) return;
     if (this.mode) this.mode.unmount();
     this.name = name;
+
+    // Canvas transition overlay — briefly blur the canvas during mode switch
+    const ov = document.getElementById("canvasOverlay");
+    if (ov) {
+      ov.classList.add("active");
+      setTimeout(() => ov.classList.remove("active"), 350);
+    }
+
     // Don't rewrite URL during onboarding — keep the URL clean
     if (name !== "onboard") writeUrlState(name);
     normalizeShellNav();
@@ -906,29 +918,83 @@ class WorkstreamsMode {
   }
 
   renderLoading() {
-    this.container.innerHTML = `<div class="cards-loading">
-      <span class="pulse-dot"></span>
-      <span>Loading workstreams…</span>
+    // Build skeleton cards matching the grid layout
+    const skeletonCard = (i) => `<div class="skeleton-card skeleton-pulse skeleton-shimmer" style="animation-delay:${i * 80}ms">`
+      <div class="skeleton-card-header">
+        <div class="skeleton-icon"></div>
+        <div class="skeleton-title-group">
+          <div class="skeleton-line wide"></div>
+          <div class="skeleton-line narrow"></div>
+        </div>
+      </div>
+      <div class="skeleton-body">
+        <div class="skeleton-line wide"></div>
+        <div class="skeleton-line short"></div>
+        <div class="skeleton-line medium"></div>
+      </div>
+      <div class="skeleton-evidence">
+        <div class="skeleton-ev-row">
+          <div class="skeleton-ev-dot"></div>
+          <div class="skeleton-line medium"></div>
+        </div>
+        <div class="skeleton-ev-row">
+          <div class="skeleton-ev-dot"></div>
+          <div class="skeleton-line short"></div>
+        </div>
+        <div class="skeleton-ev-row">
+          <div class="skeleton-ev-dot"></div>
+          <div class="skeleton-line narrow"></div>
+        </div>
+      </div>
+      <div class="skeleton-actions">
+        <div class="skeleton-btn primary"></div>
+        <div class="skeleton-btn ghost"></div>
+        <div class="skeleton-btn ghost"></div>
+      </div>
     </div>`;
+    this.container.innerHTML = `<section class="home-header">
+      <h1 class="home-title">Home</h1>
+      <p class="home-sub">Optic analyzes your digital footprint to surface what humans and algorithms infer about you.</p>
+    </section>
+    <section class="home-controls" style="opacity:.4;pointer-events:none">
+      <div class="cluster-tabs">
+        <button class="cluster-tab active">All clusters</button>
+        <button class="cluster-tab">Identity</button>
+        <button class="cluster-tab">Work & skills</button>
+        <button class="cluster-tab">Life</button>
+        <button class="cluster-tab">Relations</button>
+        <button class="cluster-tab">Behavior</button>
+      </div>
+      <div class="ws-controls-row">
+        <label class="ws-sort-wrap">Sort: <select class="ws-sort"><option>Relevance</option></select></label>
+        <div class="ws-view" role="group">
+          <button class="ws-view-btn active">⊞</button>
+          <button class="ws-view-btn">☰</button>
+        </div>
+      </div>
+    </section>
+    <section class="cards-grid">
+      ${[0,1,2,3,4,5].map(i => skeletonCard(i)).join("")}
+    </section>`;
   }
 
   renderInspectorSkeleton() {
     el.inspector.innerHTML = `
-      <section class="rail-card rail-skeleton">
-        <div class="skeleton-block skeleton-pulse" style="height:24px;width:60%;margin-bottom:8px"></div>
-        <div class="skeleton-block skeleton-pulse" style="height:14px;width:50%;margin-bottom:16px"></div>
-        <div class="skeleton-block skeleton-pulse" style="height:100px;width:100%;margin-bottom:16px;border-radius:12px"></div>
-        <div class="skeleton-block skeleton-pulse" style="height:14px;width:30%;margin-bottom:8px"></div>
-        <div class="skeleton-block skeleton-pulse" style="height:14px;width:40%;margin-bottom:8px"></div>
-        <div class="skeleton-block skeleton-pulse" style="height:14px;width:35%"></div>
+      <section class="rail-card">
+        <div class="skeleton-line skeleton-pulse wide" style="height:22px;margin-bottom:8px"></div>
+        <div class="skeleton-line skeleton-pulse short" style="height:12px;margin-bottom:16px"></div>
+        <div class="skeleton-line skeleton-pulse" style="height:100px;width:100%;margin-bottom:16px;border-radius:12px;background:rgba(0,0,0,.04)"></div>
+        <div class="skeleton-line skeleton-pulse narrow" style="height:13px;margin-bottom:8px"></div>
+        <div class="skeleton-line skeleton-pulse medium" style="height:13px;margin-bottom:8px"></div>
+        <div class="skeleton-line skeleton-pulse" style="height:13px;width:40%"></div>
       </section>
-      <section class="rail-card rail-skeleton">
-        <div class="skeleton-block skeleton-pulse" style="height:18px;width:50%;margin-bottom:12px"></div>
-        <div class="skeleton-block skeleton-pulse" style="height:32px;width:100%;margin-bottom:12px;border-radius:8px"></div>
+      <section class="rail-card">
+        <div class="skeleton-line skeleton-pulse medium" style="height:18px;margin-bottom:12px"></div>
+        <div class="skeleton-line skeleton-pulse" style="height:32px;width:100%;margin-bottom:12px;border-radius:8px;background:rgba(0,0,0,.04)"></div>
       </section>
-      <section class="rail-card rail-skeleton">
-        <div class="skeleton-block skeleton-pulse" style="height:18px;width:40%;margin-bottom:12px"></div>
-        <div class="skeleton-block skeleton-pulse" style="height:48px;width:100%"></div>
+      <section class="rail-card">
+        <div class="skeleton-line skeleton-pulse" style="height:18px;width:45%;margin-bottom:12px"></div>
+        <div class="skeleton-line skeleton-pulse" style="height:48px;width:100%;border-radius:8px;background:rgba(0,0,0,.04)"></div>
       </section>`;
   }
 
@@ -1030,15 +1096,17 @@ class WorkstreamsMode {
     const audRows = state.audiences.length ? state.audiences : [];
     const ago = esc(hd.last_analyzed_ago || "—");
     const sum = state.homeSummary || hd.iris_summary || null;
-    const sumTxt = sum ? esc(String(sum).slice(0, 170)) :
-      "Iris summary is generating from your current run.";
+    const sumTxt = sum ? esc(String(sum).slice(0, 350)) :
+      "Iris is analyzing your digital footprint. A rich personality summary will appear here once generation completes.";
+    const hasSummary = !!sum;
     const quick = audRows.slice(0, 3).map(a => {
       const s = scoreNum(a.score);
       const tier = scoreLabel(a.score);
+      const tierCls = scoreTierClass(a.score);
       return `<div class="rail-quick-row">
         <span class="rail-quick-name">${esc(a.name || a.id || "Audience")}</span>
         <span class="rail-quick-score">${s !== null ? s : "--"}</span>
-        <span class="rail-quick-tier">${tier || "—"}</span>
+        <span class="rail-quick-tier ${tierCls}">${tier || "—"}</span>
       </div>`;
     }).join("");
     // Metric grid: V1 status stats or error state (white frost-glass preserved)
@@ -1096,15 +1164,20 @@ class WorkstreamsMode {
       </section>
       <section class="rail-card">
         <div class="rail-card-head">
-          <h3>Iris quick view</h3>
+          <h3>◆ Iris insight</h3>
           <button class="rail-link" type="button"
             data-mode-jump="iris">Go to Iris</button>
         </div>
-        ${quick}
+        <div class="iris-insight-box${hasSummary ? "" : " iris-insight-pending"}">
+          <p class="iris-insight-text">${sumTxt}</p>
+          ${hasSummary ? "" : `<div class="iris-insight-loader">
+            <span class="pulse-dot"></span> <span>Generating insight…</span>
+          </div>`}
+        </div>
       </section>
       <section class="rail-card">
-        <h3>Next best action</h3>
-        <p class="muted">${sumTxt}</p>
+        <h3>Audience quick view</h3>
+        ${quick || "<p class=\"muted\">Run an audit to generate audience profiles.</p>"}
         <button class="rail-cta" type="button"
           data-mode-jump="simulations">Run simulation</button>
       </section>
@@ -1171,14 +1244,15 @@ class WorkstreamsMode {
       return;
     }
     list.innerHTML = `${
-      this.filtered.map(ws => this.cardHTML(ws)).join("")
+      this.filtered.map((ws, idx) => this.cardHTML(ws, idx)).join("")
     }`;
   }
 
-  cardHTML(ws) {
+  cardHTML(ws, idx) {
     const pct = this.confPct(ws);
     const cat = this.wsCategory(ws);
     const level = pct >= 80 ? "high" : pct >= 50 ? "medium" : "low";
+    const label = pct >= 80 ? "High" : pct >= 50 ? "Moderate" : "Developing";
     const emoji = this.emoji(ws, cat);
     const iconBg = this.catColor(cat);
     const summary = esc((ws.summary || "").replace(/^"|"$/g, ""));
@@ -1190,7 +1264,8 @@ class WorkstreamsMode {
         <span class="ws-ev-loc">${esc(row.loc)}</span>
       </div>`).join("");
     return `<article class="ws-card2${expanded ? " ws-expanded" : ""}"
-      data-ws-id="${esc(this.wsId(ws))}">
+      data-ws-id="${esc(this.wsId(ws))}"
+      style="--card-index:${idx}">
       <div class="ws-card-header ws-card2-head">
         <div class="ws-icon ws-icon2" style="background:${iconBg}">
           <span class="ws-emoji">${emoji}</span>
@@ -1199,7 +1274,7 @@ class WorkstreamsMode {
           <div class="ws-name ws-name2">${esc(ws.name || "Untitled")}</div>
           <div class="ws-conf2">
             <span class="ws-conf-dot ${level}"></span>
-            <span class="ws-conf-pct">${pct}%</span>
+            <span class="ws-conf-pct">${label} · ${pct}%</span>
           </div>
         </div>
       </div>
@@ -1213,9 +1288,9 @@ class WorkstreamsMode {
           → View in map</button>
         <div class="ws-actions2-ghost">
           <button class="ws-act-btn ws-action-ghost" data-action="inspect">
-            ${expanded ? "Collapse" : "Evidence"}</button>
+            ${expanded ? "Collapse" : "Inspect evidence"}</button>
           <button class="ws-act-btn ws-action-ghost" data-action="simulate">
-            Simulate</button>
+            Simulate audience</button>
         </div>
       </div>
     </article>`;
@@ -1305,7 +1380,7 @@ class WorkstreamsMode {
     const act = btn.dataset.action;
     if (act === "map") return this.focusCluster(ws);
     if (act === "inspect") {
-      showClaimsModal(ws);
+      this.toggleExpanded(this.wsId(ws));
       return;
     }
     if (act === "simulate") {
@@ -2411,7 +2486,7 @@ class AudiencesMode {
         <h3>${esc(r.icon || "👤")} ${esc(r.name || r.id || "Audience")}</h3>
         <div class="aud-score-row">
           <b>${scorePct(r.score)}</b>
-          <span>${scoreLabel(r.score) || "—"} confidence</span>
+          <span class="${scoreTierClass(r.score)}">${scoreLabel(r.score) || "—"} confidence</span>
         </div>
         <p>${esc(r.summary || "")}</p>
         ${sigChip}
@@ -3000,1379 +3075,10 @@ class ExportsMode {
   draw() {}
 }
 
-function integrationChips(intgCfg) {
-  if (!intgCfg || typeof intgCfg !== "object") return `<span class="rail-chip muted">No integrations configured</span>`;
-  const chips = [];
-  const channels = intgCfg.channels || {};
-  if (channels.storage?.enabled) chips.push(`${channels.storage.provider || "Storage"}`);
-  if (channels.chatops?.enabled) chips.push(`${channels.chatops.provider || "ChatOps"}`);
-  if (channels.calendar?.enabled) chips.push(`${channels.calendar.provider || "Calendar"}`);
-  if (channels.crm?.enabled) chips.push(`${channels.crm.provider || "CRM"}`);
-  if (intgCfg.email?.enabled) chips.push("Email");
-  if (intgCfg.social?.enabled) chips.push("Social");
-  if (intgCfg.webhooks?.enabled) chips.push("Webhooks");
-  if (!chips.length) {
-    const providerMode = intgCfg.provider_mode || "ollama";
-    const model = intgCfg.chat_model || intgCfg.infer_model || "";
-    if (model) chips.push(`${providerMode}:${model}`);
-    else chips.push(`${providerMode} (no model)`);
-  }
-  return chips.map(c => `<span class="rail-chip">${esc(c)}</span>`).join("");
-}
-
-class SettingsMode {
-  constructor() {
-    this.container = null;
-    this.workspace = null;
-    this.members = [];
-    this.invites = [];
-    this.integrations = null;
-    this.jobs = null;
-    this.oauthEvents = null;
-    this.connections = null;
-    this.syncState = null;
-    this.billing = null;
-    this.usage = null;
-    this.v1Settings = null;
-    this.loading = true;
-    this.error = null;
-    this.fetchError = null;
-    this.onClick = ev => this.click(ev);
-  }
-
-  async mount(container) {
-    this.container = container;
-    this.loading = true;
-    this.error = null;
-    this.fetchError = null;
-    this.renderLoading();
-    try {
-      await Promise.all([
-        refreshSettings(true),
-        refreshStatus(true),
-        this.refreshV1Settings(),
-        this.refreshOps(),
-        this.refreshBackups(),
-        this.refreshWorkspace(),
-        this.refreshMembers(),
-        this.refreshInvites(),
-        this.refreshIntegrations(),
-        this.refreshJobs(),
-        this.refreshOauthEvents(),
-        this.refreshConnections(),
-        this.refreshSyncState(),
-        this.refreshBilling(),
-        this.refreshUsage(),
-      ]);
-      this.loading = false;
-    } catch (err) {
-      this.loading = false;
-      this.fetchError = apiMsg(err) || "Failed to load settings data.";
-    }
-    this.render();
-    this.container.addEventListener("click", this.onClick);
-  }
-
-  unmount() {
-    this.container?.removeEventListener("click", this.onClick);
-    if (this.container) this.container.innerHTML = "";
-  }
-
-  async refreshOps() {
-    try {
-      this.ops = await getJson("/api/ops/health");
-    } catch (_) {
-      this.ops = null;
-    }
-  }
-
-  async refreshBackups() {
-    try {
-      const out = await getJson("/api/ops/backups");
-      this.backups = Array.isArray(out?.items) ? out.items : [];
-    } catch (_) {
-      this.backups = [];
-    }
-  }
-
-  async refreshWorkspace() {
-    try {
-      this.workspace = await getJson("/api/workspace");
-    } catch (_) {
-      this.workspace = null;
-    }
-  }
-
-  async refreshMembers() {
-    try {
-      const out = await getJson("/api/workspace/members");
-      this.members = Array.isArray(out?.members) ? out.members : [];
-    } catch (_) {
-      this.members = [];
-    }
-  }
-
-  async refreshInvites() {
-    try {
-      const out = await getJson("/api/workspace/invites");
-      this.invites = Array.isArray(out?.invites) ? out.invites : [];
-    } catch (_) {
-      this.invites = [];
-    }
-  }
-
-  async refreshIntegrations() {
-    try {
-      this.integrations = await getJson("/api/integrations/state");
-    } catch (_) {
-      this.integrations = null;
-    }
-  }
-
-  async refreshJobs() {
-    try {
-      this.jobs = await getJson("/api/integrations/jobs");
-    } catch (_) {
-      this.jobs = null;
-    }
-  }
-
-  async refreshOauthEvents() {
-    try {
-      this.oauthEvents = await getJson("/api/integrations/oauth/events");
-    } catch (_) {
-      this.oauthEvents = null;
-    }
-  }
-
-  async refreshConnections() {
-    try {
-      this.connections = await getJson("/api/integrations/connections");
-    } catch (_) {
-      this.connections = null;
-    }
-  }
-
-  async refreshSyncState() {
-    try {
-      this.syncState = await getJson("/api/integrations/sync/state");
-    } catch (_) {
-      this.syncState = null;
-    }
-  }
-
-  async refreshBilling() {
-    try {
-      this.billing = await getJson("/api/billing");
-    } catch (_) {
-      this.billing = null;
-    }
-  }
-
-  async refreshUsage() {
-    try {
-      this.usage = await getJson("/api/billing/usage");
-    } catch (_) {
-      this.usage = null;
-    }
-  }
-
-  async refreshV1Settings() {
-    try {
-      const data = await getJson("/api/v1/settings");
-      this.v1Settings = data?.settings || null;
-    } catch (_) {
-      this.v1Settings = null;
-    }
-  }
-
-  renderLoading() {
-    if (!this.container) return;
-    this.container.innerHTML = `<section class="route-wrap">
-      <header class="route-head"><h1>Settings</h1><p>Loading configuration…</p></header>
-      <section class="route-card">
-        <div class="loading-spinner" style="display:flex;align-items:center;gap:12px;padding:24px 0">
-          <span class="pulse-dot"></span>
-          <span class="muted">Fetching settings from server…</span>
-        </div>
-      </section>
-    </section>`;
-  }
-
-  render() {
-    if (this.loading) { this.renderLoading(); return; }
-    if (this.fetchError) {
-      this.container.innerHTML = `<section class="route-wrap">
-        <header class="route-head"><h1>Settings</h1><p>Could not load settings</p></header>
-        <section class="route-card">
-          <p class="err-msg">${esc(this.fetchError)}</p>
-          <button class="route-btn" data-act="retry">Retry</button>
-        </section>
-      </section>`;
-      return;
-    }
-    const set = state.settings || this.v1Settings || {};
-    const intgCfg = set.integrations || {};
-    const scan = set.scan_rules || {};
-    const prv = set.privacy || {};
-    const intg = this.integrations?.integrations || {};
-    const email = intg.email || {};
-    const social = intg.social || {};
-    const channels = intg.channels || {};
-    const cal = channels.calendar || {};
-    const crm = channels.crm || {};
-    const store = channels.storage || {};
-    const chatops = channels.chatops || {};
-    const auto = intg.automation || {};
-    const syncAuto = auto.sync || {};
-    const providers = social.providers || {};
-    const px = providers.x || {};
-    const bill = this.billing?.billing || {};
-    const use = this.usage?.usage || {};
-    const jobs = this.jobs || {};
-    const evs = Array.isArray(this.oauthEvents?.items) ?
-      this.oauthEvents.items : [];
-    const conns = Array.isArray(this.connections?.items) ?
-      this.connections.items : [];
-    const syncItems = Array.isArray(this.syncState?.items) ?
-      this.syncState.items : [];
-    const ops = this.ops || {};
-    const ws = this.workspace?.workspace || null;
-    const role = String(ws?.role || "viewer");
-    const bkp = (this.backups || []).map(x => `<option value="${esc(x.id)}">${esc(x.id)}</option>`).join("");
-    const members = (this.members || []).slice(0, 8).map(m => `<div class="route-row">
-      <span>${esc(m.name || m.email || "Member")}</span>
-      <span class="rail-chip">${esc(m.role || "member")}</span>
-    </div>`).join("") || `<p class="muted">No members yet.</p>`;
-    const invites = (this.invites || []).slice(0, 6).map(m => `<div
-      class="route-row"><span>${esc(m.email || "")}</span><span
-      class="muted">${esc(m.status || "pending")}</span></div>`).join("") ||
-      `<p class="muted">No pending invites.</p>`;
-    const jRows = (jobs.queued || []).slice(-4).map(j => `<div
-      class="route-row"><span>${esc(j.kind || "job")} · ${esc(j.id || "")}</span>
-      <span class="muted">try ${Number(j.attempt || 0)}</span></div>`).join("") ||
-      `<p class="muted">No queued jobs.</p>`;
-    const oRows = evs.slice(-5).reverse().map(row => {
-      const ts = Number(row.ts || 0);
-      const at = ts > 0 ? new Date(ts * 1000).toLocaleTimeString() : "now";
-      const detail = String(row.detail || "").trim();
-      const hint = detail ? ` · ${esc(detail)}` : "";
-      return `<div class="route-row"><span>${esc(row.event || "event")} · ` +
-        `${esc(row.provider || "oauth")} · ${esc(at)}${hint}</span></div>`;
-    }).join("") || `<p class="muted">No OAuth events yet.</p>`;
-    const connRows = conns.slice(0, 8).map(row => {
-      const tone = String(row.status || "") === "connected" ? "ok" : "warn";
-      const sync = String(row.sync_status || "idle");
-      const label = `${row.channel || "channel"}:${row.provider || "provider"}`;
-      const hint = row.account ? ` · ${row.account}` : "";
-      return `<div class="route-row"><span>${esc(label)}${esc(hint)}</span>
-        <span class="rail-chip rail-chip-${tone}">${esc(sync)}</span></div>`;
-    }).join("") || `<p class="muted">No integration connections yet.</p>`;
-    const syncRows = syncItems.slice(0, 6).map(row => {
-      const ts = Number(row.updated_at || 0);
-      const at = ts > 0 ? new Date(ts * 1000).toLocaleTimeString() : "n/a";
-      return `<div class="route-row"><span>${esc(
-        `${row.channel}:${row.provider}`
-      )} · ${esc(row.status || "idle")}</span><span class="muted">${esc(
-        at
-      )}</span></div>`;
-    }).join("") || `<p class="muted">No sync state yet.</p>`;
-    this.container.innerHTML = `<section class="route-wrap">
-      <header class="route-head"><h1>Settings</h1><p>Control how Optic works on this device.</p></header>
-      <section class="route-card">
-        <h3>Profile & account</h3>
-        <div class="route-form-row">
-          <input id="setName" placeholder="Display name"
-            value="${esc(set.profile?.display_name || "")}">
-          <input id="setDays" type="number" min="1" max="365"
-            value="${Number(set.profile?.session_days || 30)}">
-        </div>
-        <div class="route-form-row">
-          <input id="setQueue" type="number" min="1" value="${Number(scan.queue_cap || 6)}" title="queue cap">
-          <input id="setRetry" type="number" min="0" value="${Number(scan.retry_max || 2)}" title="retry max">
-          <input id="setBackoff" type="number" min="0.1" step="0.1" value="${Number(scan.backoff_s || 3)}" title="backoff seconds">
-          <input id="setTimeout" type="number" min="30" value="${Number(scan.timeout_s || 300)}" title="timeout seconds">
-        </div>
-        <div class="route-row">
-          <label class="sim-check"><input type="checkbox" id="setRedact"${prv.redact_exports ? " checked" : ""}><span>Redact sensitive data in exports</span></label>
-          <label class="sim-check"><input type="checkbox" checked><span>On-device mode</span></label>
-          <label class="sim-check"><input type="checkbox" checked><span>Smart scan</span></label>
-        </div>
-        <div class="route-card">
-          <h3>Integrations</h3>
-          <div class="rail-chip-row" id="settingsIntelChips">
-            ${integrationChips(intgCfg)}
-          </div>
-        </div>
-        <div class="route-row">
-          <button class="route-cta" data-act="save">Save Settings</button>
-        </div>
-        <div id="setMsg" class="muted">Ready.</div>
-      </section>
-      <section class="route-card">
-        <h3>System health</h3>
-        <p class="muted">Runs: ${Number(ops?.index?.runs_total || 0)} · Latest: ${esc(ops?.index?.latest_run || "none")} · Queue: ${Number(ops?.index?.status?.queue_depth || 0)}</p>
-        <p class="muted">Storage free: ${humanSize(Number(ops?.storage?.free_bytes || 0))} · Model: ${esc(intgCfg.chat_model || intgCfg.infer_model || ops?.model?.model || "not configured")}</p>
-      </section>
-      <section class="route-card">
-        <h3>LLM runtime</h3>
-        <div class="route-form-row">
-          <select id="setProviderMode">
-            ${["ollama","mirofish","openai","anthropic"].map(p => `<option value="${p}"${String(intgCfg.provider_mode || "ollama") === p ? " selected" : ""}>${p}</option>`).join("")}
-          </select>
-          <input id="setOllamaUrl" placeholder="Ollama URL"
-            value="${esc(intgCfg.ollama_url || "http://localhost:11434")}">
-        </div>
-        <div class="route-form-row">
-          <input id="setChatModel" placeholder="Chat model"
-            value="${esc(intgCfg.chat_model || "")}">
-          <input id="setInferModel" placeholder="Inference model"
-            value="${esc(intgCfg.infer_model || "")}">
-          <input id="setIrisModel" placeholder="Iris model"
-            value="${esc(intgCfg.iris_model || "")}">
-        </div>
-        <div class="route-row">
-          <button class="route-btn" data-act="saveLlm">Save LLM config</button>
-        </div>
-        <div id="setLlmMsg" class="muted">${intgCfg.chat_model ? `Active: ${esc(intgCfg.chat_model)}` : "No model configured."}</div>
-      </section>
-      <section class="route-card">
-        <h3>Workspace</h3>
-        <p class="muted">Name: ${esc(ws?.name || "Not initialized")} · Role:
-          ${esc(role)} · Members: ${Number(ws?.member_count || 0)}</p>
-        <div class="route-form-row">
-          <input id="wsName" placeholder="Workspace name"
-            value="${esc(ws?.name || "Optic Workspace")}">
-          <input id="wsSlug" placeholder="workspace-slug"
-            value="${esc(ws?.slug || "optic-workspace")}">
-        </div>
-        <div class="route-row">
-          <button class="route-btn" data-act="saveWorkspace">Save workspace</button>
-          <button class="route-btn" data-act="reloadWorkspace">Refresh</button>
-        </div>
-        <div class="route-card">
-          <h3>Team members</h3>
-          ${members}
-        </div>
-        <div class="route-card">
-          <h3>Invites</h3>
-          <div class="route-form-row">
-            <input id="wsInviteEmail" placeholder="teammate@example.com">
-            <select id="wsInviteRole">
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
-            <button class="route-btn" data-act="inviteMember">Invite</button>
-          </div>
-          ${invites}
-        </div>
-      </section>
-      <section class="route-card">
-        <h3>Growth channels (foundation)</h3>
-        <div class="route-form-row">
-          <label class="sim-check"><input type="checkbox"
-            id="intEmailEnabled"${email.enabled ? " checked" : ""}><span>Email enabled</span></label>
-          <label class="sim-check"><input type="checkbox"
-            id="intSocialEnabled"${social.enabled ? " checked" : ""}><span>Social enabled</span></label>
-        </div>
-        <div class="route-form-row">
-          <select id="intEmailProvider">
-            ${["smtp","ses","sendgrid","resend"].map(p => `<option value="${p}"${String(email.provider || "smtp") === p ? " selected" : ""}>${p.toUpperCase()}</option>`).join("")}
-          </select>
-          <input id="intFromEmail" placeholder="noreply@yourdomain.com"
-            value="${esc(email.from_email || "")}">
-          <input id="intXHandle" placeholder="@brand"
-            value="${esc(px.handle || "")}">
-        </div>
-        <div class="route-form-row">
-          <input id="intXTokenRef" placeholder="x token ref"
-            value="${esc(px.token_ref || "")}">
-          <input id="intXSecret" type="password"
-            placeholder="x access token (saved locally)">
-          <button class="route-btn" data-act="saveXSecret">Save X token</button>
-        </div>
-        <div class="route-form-row">
-          <select id="intSecretProvider">
-            ${["x", "linkedin", "youtube", "tiktok", "instagram", "threads",
-              "calendar_google", "calendar_outlook", "crm_hubspot",
-              "crm_salesforce", "storage_drive", "storage_dropbox",
-              "storage_onedrive", "chatops_slack", "chatops_discord",
-              "email_google", "email_outlook", "webhook",
-              "email"].map(p => `<option value="${p}">${
-                esc(p.toUpperCase())
-              }</option>`).join("")}
-          </select>
-          <input id="intSecretRef" placeholder="token ref">
-          <input id="intSecretVal" type="password"
-            placeholder="provider token / secret">
-          <button class="route-btn" data-act="saveSecret">Save token</button>
-        </div>
-        <div class="route-form-row">
-          <input id="intSmtpHost" placeholder="smtp host"
-            value="${esc(email.smtp_host || "")}">
-          <input id="intSmtpPort" type="number" min="1" max="65535"
-            value="${Number(email.smtp_port || 587)}">
-          <input id="intSmtpUser" placeholder="smtp user"
-            value="${esc(email.smtp_user || "")}">
-        </div>
-        <div class="route-row">
-          <label class="sim-check"><input type="checkbox"
-            id="intSmtpSsl"${email.smtp_use_ssl ? " checked" : ""}>
-            <span>SMTP SSL</span></label>
-          <label class="sim-check"><input type="checkbox"
-            id="intSmtpTls"${email.smtp_starttls !== false ? " checked" : ""}>
-            <span>SMTP STARTTLS</span></label>
-        </div>
-        <div class="route-row">
-          <button class="route-btn" data-act="saveIntegrations">Save channels</button>
-          <button class="route-btn" data-act="refreshJobs">Refresh jobs</button>
-        </div>
-        <div class="route-card">
-          <h3>Future channels</h3>
-          <div class="route-form-row">
-            <label class="sim-check"><input type="checkbox"
-              id="intCalEnabled"${cal.enabled ? " checked" : ""}>
-              <span>Calendar</span></label>
-            <select id="intCalProvider">
-              ${["google", "outlook"].map(p => `<option value="${p}"${String(cal.provider || "google") === p ? " selected" : ""}>${p.toUpperCase()}</option>`).join("")}
-            </select>
-            <input id="intCalAccount" placeholder="account id/email"
-              value="${esc(cal.account || "")}">
-            <input id="intCalTokenRef" placeholder="token ref"
-              value="${esc(cal.token_ref || "")}">
-          </div>
-          <div class="route-form-row">
-            <label class="sim-check"><input type="checkbox"
-              id="intCrmEnabled"${crm.enabled ? " checked" : ""}>
-              <span>CRM</span></label>
-            <select id="intCrmProvider">
-              ${["hubspot", "salesforce"].map(p => `<option value="${p}"${String(crm.provider || "hubspot") === p ? " selected" : ""}>${p.toUpperCase()}</option>`).join("")}
-            </select>
-            <input id="intCrmAccount" placeholder="account id"
-              value="${esc(crm.account || "")}">
-            <input id="intCrmTokenRef" placeholder="token ref"
-              value="${esc(crm.token_ref || "")}">
-          </div>
-          <div class="route-form-row">
-            <label class="sim-check"><input type="checkbox"
-              id="intStoreEnabled"${store.enabled ? " checked" : ""}>
-              <span>Storage</span></label>
-            <select id="intStoreProvider">
-              ${["drive", "dropbox", "onedrive"].map(p => `<option value="${p}"${String(store.provider || "drive") === p ? " selected" : ""}>${p.toUpperCase()}</option>`).join("")}
-            </select>
-            <input id="intStoreAccount" placeholder="workspace id"
-              value="${esc(store.account || "")}">
-            <input id="intStoreTokenRef" placeholder="token ref"
-              value="${esc(store.token_ref || "")}">
-          </div>
-          <div class="route-form-row">
-            <label class="sim-check"><input type="checkbox"
-              id="intChatopsEnabled"${chatops.enabled ? " checked" : ""}>
-              <span>ChatOps</span></label>
-            <select id="intChatopsProvider">
-              ${["slack", "discord"].map(p => `<option value="${p}"${String(chatops.provider || "slack") === p ? " selected" : ""}>${p.toUpperCase()}</option>`).join("")}
-            </select>
-            <input id="intChatopsAccount" placeholder="#channel / server"
-              value="${esc(chatops.account || "")}">
-            <input id="intChatopsTokenRef" placeholder="token ref"
-              value="${esc(chatops.token_ref || "")}">
-          </div>
-          <div class="route-form-row">
-            <label class="sim-check"><input type="checkbox"
-              id="intSyncEnabled"${syncAuto.enabled ? " checked" : ""}>
-              <span>Auto sync</span></label>
-            <input id="intSyncInterval" type="number" min="5" max="1440"
-              value="${Number(syncAuto.interval_min || 30)}">
-          </div>
-          <div class="route-row">
-            <button class="route-btn" data-act="connectCalendarOauth">
-              Connect Calendar OAuth
-            </button>
-            <button class="route-btn" data-act="connectChatopsOauth">
-              Connect ChatOps OAuth
-            </button>
-            <button class="route-btn" data-act="connectStorageOauth">
-              Connect Storage OAuth
-            </button>
-            <button class="route-btn" data-act="refreshOauthToken">
-              Refresh selected token
-            </button>
-            <button class="route-btn danger" data-act="revokeOauthToken">
-              Revoke selected token
-            </button>
-          </div>
-        </div>
-        <div class="route-row">
-          <button class="route-btn" data-act="queueDigest">Queue email digest</button>
-          <button class="route-btn" data-act="queuePost">Queue social post</button>
-          <button class="route-btn" data-act="queueCalSync">Queue calendar sync</button>
-          <button class="route-btn" data-act="queueCrmSync">Queue CRM sync</button>
-        </div>
-        <div class="route-row">
-          <button class="route-btn" data-act="queueStoreSync">Queue storage sync</button>
-          <button class="route-btn" data-act="queueChatopsPost">Queue ChatOps post</button>
-        </div>
-        <div class="route-card">
-          <h3>Automation queue</h3>
-          <p class="muted">Queued: ${Number(jobs.queue_depth || 0)} · Done:
-            ${Number((jobs.done || []).length)} · Dead:
-            ${Number((jobs.dead || []).length)}</p>
-          <div class="route-form-row">
-            <select id="intReplayKind">
-              <option value="">All replayable</option>
-              <option value="email">Email</option>
-              <option value="social">Social</option>
-              <option value="channel">Channel</option>
-            </select>
-            <input id="intReplayLimit" type="number" min="1" max="20"
-              value="8">
-            <button class="route-btn" data-act="previewReplay">
-              Preview replay
-            </button>
-            <button class="route-btn" data-act="runReplay">
-              Replay dead jobs
-            </button>
-            <button class="route-btn" data-act="refreshOauthEvents">
-              Refresh OAuth events
-            </button>
-            <button class="route-btn" data-act="refreshConnections">
-              Refresh connections
-            </button>
-          </div>
-          ${jRows}
-          <div class="route-card">
-            <h3>OAuth events</h3>
-            ${oRows}
-          </div>
-          <div class="route-card">
-            <h3>Connection health</h3>
-            ${connRows}
-          </div>
-          <div class="route-card">
-            <h3>Sync state</h3>
-            ${syncRows}
-          </div>
-        </div>
-      </section>
-      <section class="route-card">
-        <h3>Billing & entitlements</h3>
-        <div class="route-form-row">
-          <select id="billPlan">
-            ${["free","pro","team","enterprise"].map(p => `<option value="${p}"${String(bill.plan || "free") === p ? " selected" : ""}>${p.toUpperCase()}</option>`).join("")}
-          </select>
-          <input id="billSeats" type="number" min="1" value="${Number(
-            bill.seats || 1
-          )}">
-          <button class="route-btn" data-act="saveBilling">Save plan</button>
-        </div>
-        <div class="route-row">
-          <button class="route-btn" data-act="checkoutBilling">
-            Upgrade checkout
-          </button>
-          <button class="route-btn" data-act="portalBilling">
-            Open billing portal
-          </button>
-        </div>
-        <div class="route-row">
-          <span class="muted">Status: ${esc(String(bill.status || "active"))}</span>
-          <span class="muted">Files: ${Number(use.files || 0).toLocaleString()}</span>
-          <span class="muted">API hits: ${Number(use.api_hits || 0).toLocaleString()}</span>
-        </div>
-      </section>
-      <section class="route-card">
-        <h3>Backups and danger zone</h3>
-        <div class="route-form-row">
-          <button class="route-btn" data-act="backup">Backup now</button>
-          <select id="setRestoreSel">${bkp}</select>
-          <button class="route-btn" data-act="restore">Restore</button>
-        </div>
-        <div class="route-row">
-          <button class="route-btn danger" data-act="clearDead">Clear Dead Letters</button>
-          <button class="route-btn danger" data-act="resetSummary">Reset Home Summary</button>
-        </div>
-      </section>
-    </section>`;
-  }
-
-  payload() {
-    return {
-      settings: {
-        profile: {
-          display_name: this.container.querySelector("#setName")?.value || "",
-          session_days: Number(this.container.querySelector("#setDays")?.value || 30),
-        },
-        scan_rules: {
-          queue_cap: Number(this.container.querySelector("#setQueue")?.value || 6),
-          retry_max: Number(this.container.querySelector("#setRetry")?.value || 2),
-          backoff_s: Number(this.container.querySelector("#setBackoff")?.value || 3),
-          timeout_s: Number(this.container.querySelector("#setTimeout")?.value || 300),
-        },
-        privacy: {
-          redact_exports: !!this.container.querySelector("#setRedact")?.checked,
-        },
-      },
-    };
-  }
-
-  queueIdem(kind, payload) {
-    const row = payload && typeof payload === "object" ? payload : {};
-    const channel = String(row.channel || row.provider || "core");
-    const action = String(row.action || row.subject || kind || "job");
-    const bucket = new Date().toISOString().slice(0, 16);
-    return `ui_${kind}_${channel}_${action}_${bucket}`
-      .replace(/[^A-Za-z0-9_.:-]/g, "_")
-      .slice(0, 120);
-  }
-
-  replayReq(dryRun) {
-    const kind = this.container.querySelector("#intReplayKind")?.value || "";
-    const lim = Number(this.container.querySelector("#intReplayLimit")
-      ?.value || 8);
-    const body = {
-      confirm: "REPLAY",
-      limit: Math.max(1, Math.min(20, lim || 8)),
-      dry_run: !!dryRun,
-    };
-    if (kind) body.kind = kind;
-    return body;
-  }
-
-  async click(ev) {
-    const btn = ev.target.closest("button[data-act]");
-    if (!btn) return;
-    const act = btn.dataset.act;
-    const msg = this.container.querySelector("#setMsg");
-    if (act === "reloadWorkspace") {
-      await Promise.all([
-        this.refreshWorkspace(),
-        this.refreshMembers(),
-        this.refreshInvites(),
-      ]);
-      this.render();
-      const next = this.container.querySelector("#setMsg");
-      if (next) next.textContent = "Workspace refreshed.";
-      return;
-    }
-    if (act === "saveWorkspace") {
-      try {
-        const name = this.container.querySelector("#wsName")?.value || "";
-        const slug = this.container.querySelector("#wsSlug")?.value || "";
-        await postJson("/api/workspace", { name, slug });
-        await this.refreshWorkspace();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Workspace saved.";
-      } catch (err) {
-        if (msg) msg.textContent = `Workspace save failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "inviteMember") {
-      try {
-        const email = this.container.querySelector("#wsInviteEmail")?.value ||
-          "";
-        const role = this.container.querySelector("#wsInviteRole")?.value ||
-          "member";
-        await postJson("/api/workspace/invites", { email, role });
-        await this.refreshInvites();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Invite created.";
-      } catch (err) {
-        if (msg) msg.textContent = `Invite failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "saveIntegrations") {
-      try {
-        const emailEnabled = !!this.container.querySelector(
-          "#intEmailEnabled"
-        )?.checked;
-        const socialEnabled = !!this.container.querySelector(
-          "#intSocialEnabled"
-        )?.checked;
-        const emailProvider = this.container.querySelector(
-          "#intEmailProvider"
-        )?.value || "smtp";
-        const fromEmail = this.container.querySelector("#intFromEmail")?.value
-          || "";
-        const smtpHost = this.container.querySelector("#intSmtpHost")?.value
-          || "";
-        const smtpPort = Number(this.container.querySelector("#intSmtpPort")
-          ?.value || 587);
-        const smtpUser = this.container.querySelector("#intSmtpUser")?.value
-          || "";
-        const smtpSsl = !!this.container.querySelector("#intSmtpSsl")?.checked;
-        const smtpTls = !!this.container.querySelector("#intSmtpTls")?.checked;
-        const xHandle = this.container.querySelector("#intXHandle")?.value ||
-          "";
-        const calEnabled = !!this.container.querySelector(
-          "#intCalEnabled"
-        )?.checked;
-        const crmEnabled = !!this.container.querySelector(
-          "#intCrmEnabled"
-        )?.checked;
-        const storeEnabled = !!this.container.querySelector(
-          "#intStoreEnabled"
-        )?.checked;
-        const chatopsEnabled = !!this.container.querySelector(
-          "#intChatopsEnabled"
-        )?.checked;
-        const syncEnabled = !!this.container.querySelector(
-          "#intSyncEnabled"
-        )?.checked;
-        const syncInterval = Number(this.container.querySelector(
-          "#intSyncInterval"
-        )?.value || 30);
-        const syncChannels = [];
-        if (calEnabled) syncChannels.push("calendar");
-        if (crmEnabled) syncChannels.push("crm");
-        if (storeEnabled) syncChannels.push("storage");
-        if (chatopsEnabled) syncChannels.push("chatops");
-        await postJson("/api/integrations/state", {
-          integrations: {
-            email: {
-              enabled: emailEnabled,
-              provider: emailProvider,
-              from_email: fromEmail,
-              smtp_host: smtpHost,
-              smtp_port: smtpPort,
-              smtp_user: smtpUser,
-              smtp_use_ssl: smtpSsl,
-              smtp_starttls: smtpTls,
-            },
-            social: {
-              enabled: socialEnabled,
-              providers: {
-                x: {
-                  enabled: socialEnabled,
-                  handle: xHandle,
-                  token_ref: this.container.querySelector("#intXTokenRef")
-                    ?.value || "",
-                },
-              },
-            },
-            channels: {
-              calendar: {
-                enabled: calEnabled,
-                provider: this.container.querySelector("#intCalProvider")
-                  ?.value || "google",
-                account: this.container.querySelector("#intCalAccount")
-                  ?.value || "",
-                token_ref: this.container.querySelector("#intCalTokenRef")
-                  ?.value || "",
-              },
-              crm: {
-                enabled: crmEnabled,
-                provider: this.container.querySelector("#intCrmProvider")
-                  ?.value || "hubspot",
-                account: this.container.querySelector("#intCrmAccount")
-                  ?.value || "",
-                token_ref: this.container.querySelector("#intCrmTokenRef")
-                  ?.value || "",
-              },
-              storage: {
-                enabled: storeEnabled,
-                provider: this.container.querySelector("#intStoreProvider")
-                  ?.value || "drive",
-                account: this.container.querySelector("#intStoreAccount")
-                  ?.value || "",
-                token_ref: this.container.querySelector("#intStoreTokenRef")
-                  ?.value || "",
-              },
-              chatops: {
-                enabled: chatopsEnabled,
-                provider: this.container.querySelector("#intChatopsProvider")
-                  ?.value || "slack",
-                account: this.container.querySelector("#intChatopsAccount")
-                  ?.value || "",
-                token_ref: this.container.querySelector("#intChatopsTokenRef")
-                  ?.value || "",
-              },
-            },
-            automation: {
-              sync: {
-                enabled: syncEnabled,
-                interval_min: Math.max(5, Math.min(1440, syncInterval || 30)),
-                channels: syncChannels,
-              },
-            },
-          },
-        });
-        await Promise.all([
-          this.refreshIntegrations(),
-          this.refreshConnections(),
-        ]);
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Channels saved.";
-      } catch (err) {
-        if (msg) msg.textContent = `Channel save failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "saveXSecret") {
-      try {
-        const token_ref = this.container.querySelector("#intXTokenRef")?.value
-          || "";
-        const secret = this.container.querySelector("#intXSecret")?.value
-          || "";
-        await postJson("/api/integrations/secrets", {
-          provider: "x",
-          token_ref,
-          secret,
-        });
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "X token saved.";
-      } catch (err) {
-        if (msg) msg.textContent = `Secret save failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "saveSecret") {
-      try {
-        const provider = this.container.querySelector("#intSecretProvider")
-          ?.value || "";
-        const token_ref = this.container.querySelector("#intSecretRef")
-          ?.value || "";
-        const secret = this.container.querySelector("#intSecretVal")
-          ?.value || "";
-        await postJson("/api/integrations/secrets", {
-          provider,
-          token_ref,
-          secret,
-        });
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = `${provider} token saved.`;
-      } catch (err) {
-        if (msg) msg.textContent = `Secret save failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "connectCalendarOauth") {
-      try {
-        const prv = this.container.querySelector("#intCalProvider")?.value ||
-          "google";
-        const map = {
-          google: "calendar_google",
-          outlook: "calendar_outlook",
-        };
-        const provider = map[prv] || "";
-        if (!provider) throw new Error("Unsupported calendar provider.");
-        const token_ref = this.container.querySelector("#intCalTokenRef")
-          ?.value || `${provider}_main`;
-        const out = await postJson("/api/integrations/oauth/start", {
-          provider,
-          token_ref,
-        });
-        const url = String(out.auth_url || "").trim();
-        if (!url) throw new Error("OAuth URL missing.");
-        window.open(url, "_blank", "noopener,noreferrer");
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "OAuth flow opened for Calendar.";
-      } catch (err) {
-        if (msg) msg.textContent = `OAuth start failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "connectStorageOauth") {
-      try {
-        const prv = this.container.querySelector("#intStoreProvider")?.value ||
-          "drive";
-        const map = {
-          drive: "storage_drive",
-          onedrive: "storage_onedrive",
-        };
-        const provider = map[prv] || "";
-        if (!provider) throw new Error("OAuth not available for provider.");
-        const token_ref = this.container.querySelector("#intStoreTokenRef")
-          ?.value || `${provider}_main`;
-        const out = await postJson("/api/integrations/oauth/start", {
-          provider,
-          token_ref,
-        });
-        const url = String(out.auth_url || "").trim();
-        if (!url) throw new Error("OAuth URL missing.");
-        window.open(url, "_blank", "noopener,noreferrer");
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "OAuth flow opened for Storage.";
-      } catch (err) {
-        if (msg) msg.textContent = `OAuth start failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "connectChatopsOauth") {
-      try {
-        const prv = this.container.querySelector("#intChatopsProvider")
-          ?.value || "slack";
-        const provider = prv === "slack" ? "chatops_slack" : "";
-        if (!provider) throw new Error("ChatOps OAuth currently supports Slack only.");
-        const token_ref = this.container.querySelector("#intChatopsTokenRef")
-          ?.value || "chatops_slack_main";
-        const out = await postJson("/api/integrations/oauth/start", {
-          provider,
-          token_ref,
-        });
-        const url = String(out.auth_url || "").trim();
-        if (!url) throw new Error("OAuth URL missing.");
-        window.open(url, "_blank", "noopener,noreferrer");
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "OAuth flow opened for ChatOps.";
-      } catch (err) {
-        if (msg) msg.textContent = `OAuth start failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "refreshOauthToken") {
-      try {
-        const provider = this.container.querySelector("#intSecretProvider")
-          ?.value || "";
-        const token_ref = this.container.querySelector("#intSecretRef")
-          ?.value || "";
-        if (!provider || !token_ref) throw new Error("Choose provider + token ref.");
-        const out = await postJson("/api/integrations/oauth/refresh", {
-          provider,
-          token_ref,
-        });
-        const next = this.container.querySelector("#setMsg");
-        const ts = Number(out.expires_at || 0);
-        if (next) next.textContent = ts > 0
-          ? `Token refreshed. Expires: ${new Date(ts * 1000).toLocaleString()}`
-          : "Token refreshed.";
-      } catch (err) {
-        if (msg) msg.textContent = `OAuth refresh failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "revokeOauthToken") {
-      try {
-        const provider = this.container.querySelector("#intSecretProvider")
-          ?.value || "";
-        const token_ref = this.container.querySelector("#intSecretRef")
-          ?.value || "";
-        if (!provider || !token_ref) throw new Error("Choose provider + token ref.");
-        await postJson("/api/integrations/oauth/revoke", {
-          provider,
-          token_ref,
-          revoke_remote: true,
-        });
-        await Promise.all([
-          this.refreshIntegrations(),
-          this.refreshOauthEvents(),
-          this.refreshConnections(),
-        ]);
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Token revoked.";
-      } catch (err) {
-        if (msg) msg.textContent = `OAuth revoke failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "refreshJobs") {
-      await Promise.all([this.refreshJobs(), this.refreshSyncState()]);
-      this.render();
-      const next = this.container.querySelector("#setMsg");
-      if (next) next.textContent = "Job queue refreshed.";
-      return;
-    }
-    if (act === "refreshOauthEvents") {
-      await Promise.all([
-        this.refreshOauthEvents(),
-        this.refreshConnections(),
-      ]);
-      this.render();
-      const next = this.container.querySelector("#setMsg");
-      if (next) next.textContent = "OAuth events refreshed.";
-      return;
-    }
-    if (act === "refreshConnections") {
-      await Promise.all([
-        this.refreshConnections(),
-        this.refreshSyncState(),
-      ]);
-      this.render();
-      const next = this.container.querySelector("#setMsg");
-      if (next) next.textContent = "Connections refreshed.";
-      return;
-    }
-    if (act === "previewReplay") {
-      try {
-        const out = await postJson(
-          "/api/integrations/jobs/replay",
-          this.replayReq(true),
-        );
-        const cnt = Number(out.requested || 0);
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = `Replay preview ready: ${cnt} candidate(s).`;
-      } catch (err) {
-        if (msg) msg.textContent = `Replay preview failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "runReplay") {
-      try {
-        const out = await postJson(
-          "/api/integrations/jobs/replay",
-          this.replayReq(false),
-        );
-        await this.refreshJobs();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        const ok = Number(out.accepted_count || 0);
-        const skip = Array.isArray(out.skipped) ? out.skipped.length : 0;
-        if (next) next.textContent = `Replay queued: ${ok}, skipped: ${skip}.`;
-      } catch (err) {
-        if (msg) msg.textContent = `Replay failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "queueDigest") {
-      try {
-        const to = this.container.querySelector("#intFromEmail")?.value || "";
-        const rep = state.report || await refreshReport(true);
-        const corpus = rep?.corpus || {};
-        const topWs = (state.workstreams || []).slice(0, 3)
-          .map(w => `- ${w.name || "Untitled"} (${Number(w.file_count || 0)})`)
-          .join("\n");
-        const body = [
-          `Run: ${state.run || "latest"}`,
-          `Files indexed: ${Number(corpus.total_files || 0).toLocaleString()}`,
-          `Corpus size: ${humanSize(Number(corpus.total_bytes || 0))}`,
-          `Signals this week: ${Number(corpus.recent_week || 0).toLocaleString()}`,
-          topWs ? `Top workstreams:\n${topWs}` : "Top workstreams: none yet",
-        ].join("\n");
-        await postJson("/api/integrations/jobs", {
-          kind: "email",
-          payload: {
-            to,
-            subject: "Optic daily digest",
-            body,
-          },
-          idempotency_key: this.queueIdem("email", {
-            to,
-            subject: "Optic daily digest",
-          }),
-        });
-        await this.refreshJobs();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Email digest job queued.";
-      } catch (err) {
-        if (msg) msg.textContent = `Queue failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "queuePost") {
-      try {
-        const handle = this.container.querySelector("#intXHandle")?.value
-          || "@optic";
-        const token_ref = this.container.querySelector("#intXTokenRef")?.value
-          || "";
-        const rep = state.report || await refreshReport(true);
-        const files = Number(rep?.corpus?.total_files || state.nodes.length || 0);
-        const topAud = (state.audiences && state.audiences.length) ?
-          state.audiences[0] : null;
-        const sig = topAud ? `${topAud.name}: ${scorePct(topAud.score)}` :
-          "signal baseline pending";
-        const content = `Optic update: ${files.toLocaleString()} files indexed. ` +
-          `${sig}. Run ${state.run || "latest"}.`;
-        await postJson("/api/integrations/jobs", {
-          kind: "social",
-          payload: {
-            provider: "x",
-            account: handle,
-            content,
-            token_ref,
-          },
-          idempotency_key: this.queueIdem("social", {
-            provider: "x",
-            account: handle,
-            action: "post",
-          }),
-        });
-        await this.refreshJobs();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Social post job queued.";
-      } catch (err) {
-        if (msg) msg.textContent = `Queue failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "queueCalSync") {
-      try {
-        await postJson("/api/integrations/jobs", {
-          kind: "channel",
-          payload: {
-            channel: "calendar",
-            provider: this.container.querySelector("#intCalProvider")
-              ?.value || "google",
-            account: this.container.querySelector("#intCalAccount")
-              ?.value || "",
-            token_ref: this.container.querySelector("#intCalTokenRef")
-              ?.value || "",
-            action: "sync_events",
-            data: { window_days: 14 },
-          },
-          idempotency_key: this.queueIdem("channel", {
-            channel: "calendar",
-            provider: this.container.querySelector("#intCalProvider")
-              ?.value || "google",
-            action: "sync_events",
-          }),
-        });
-        await this.refreshJobs();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Calendar sync job queued.";
-      } catch (err) {
-        if (msg) msg.textContent = `Queue failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "queueCrmSync") {
-      try {
-        await postJson("/api/integrations/jobs", {
-          kind: "channel",
-          payload: {
-            channel: "crm",
-            provider: this.container.querySelector("#intCrmProvider")
-              ?.value || "hubspot",
-            account: this.container.querySelector("#intCrmAccount")
-              ?.value || "",
-            token_ref: this.container.querySelector("#intCrmTokenRef")
-              ?.value || "",
-            action: "sync_contacts",
-            data: { include_companies: true },
-          },
-          idempotency_key: this.queueIdem("channel", {
-            channel: "crm",
-            provider: this.container.querySelector("#intCrmProvider")
-              ?.value || "hubspot",
-            action: "sync_contacts",
-          }),
-        });
-        await this.refreshJobs();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "CRM sync job queued.";
-      } catch (err) {
-        if (msg) msg.textContent = `Queue failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "queueStoreSync") {
-      try {
-        await postJson("/api/integrations/jobs", {
-          kind: "channel",
-          payload: {
-            channel: "storage",
-            provider: this.container.querySelector("#intStoreProvider")
-              ?.value || "drive",
-            account: this.container.querySelector("#intStoreAccount")
-              ?.value || "",
-            token_ref: this.container.querySelector("#intStoreTokenRef")
-              ?.value || "",
-            action: "sync_files",
-            data: { include_shared: true },
-          },
-          idempotency_key: this.queueIdem("channel", {
-            channel: "storage",
-            provider: this.container.querySelector("#intStoreProvider")
-              ?.value || "drive",
-            action: "sync_files",
-          }),
-        });
-        await this.refreshJobs();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Storage sync job queued.";
-      } catch (err) {
-        if (msg) msg.textContent = `Queue failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "queueChatopsPost") {
-      try {
-        const run = state.run || "latest";
-        const files = Number(state.nodes?.length || 0).toLocaleString();
-        const text = `Optic sync: ${files} files indexed in run ${run}.`;
-        await postJson("/api/integrations/jobs", {
-          kind: "channel",
-          payload: {
-            channel: "chatops",
-            provider: this.container.querySelector("#intChatopsProvider")
-              ?.value || "slack",
-            account: this.container.querySelector("#intChatopsAccount")
-              ?.value || "",
-            token_ref: this.container.querySelector("#intChatopsTokenRef")
-              ?.value || "",
-            action: "post_status",
-            data: { text },
-          },
-          idempotency_key: this.queueIdem("channel", {
-            channel: "chatops",
-            provider: this.container.querySelector("#intChatopsProvider")
-              ?.value || "slack",
-            action: "post_status",
-          }),
-        });
-        await this.refreshJobs();
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "ChatOps post job queued.";
-      } catch (err) {
-        if (msg) msg.textContent = `Queue failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "saveBilling") {
-      try {
-        const plan = this.container.querySelector("#billPlan")?.value || "free";
-        const seats = Number(this.container.querySelector("#billSeats")?.value
-          || 1);
-        await postJson("/api/billing/plan", { plan, seats });
-        await Promise.all([this.refreshBilling(), this.refreshUsage()]);
-        this.render();
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Plan saved.";
-      } catch (err) {
-        if (msg) msg.textContent = `Plan save failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "checkoutBilling") {
-      try {
-        const plan = this.container.querySelector("#billPlan")?.value || "pro";
-        const seats = Number(this.container.querySelector("#billSeats")?.value
-          || 1);
-        const out = await postJson("/api/billing/checkout", { plan, seats });
-        const url = String(out.checkout_url || "").trim();
-        if (!url) throw new Error("Checkout URL missing.");
-        window.open(url, "_blank", "noopener,noreferrer");
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Checkout opened in new tab.";
-      } catch (err) {
-        if (msg) msg.textContent = `Checkout failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "portalBilling") {
-      try {
-        const out = await postJson("/api/billing/portal", {});
-        const url = String(out.portal_url || "").trim();
-        if (!url) throw new Error("Portal URL missing.");
-        window.open(url, "_blank", "noopener,noreferrer");
-        const next = this.container.querySelector("#setMsg");
-        if (next) next.textContent = "Billing portal opened in new tab.";
-      } catch (err) {
-        if (msg) msg.textContent = `Portal failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "save") {
-      try {
-        const out = await postJson("/api/settings", this.payload());
-        state.settings = out.settings;
-        if (msg) msg.textContent = "Saved.";
-      } catch (err) {
-        if (msg) msg.textContent = `Save failed: ${apiMsg(err)}`;
-      }
-      return;
-    }
-    if (act === "backup") {
-      await postJson("/api/ops/backup", { tag: "ui" });
-      await this.refreshBackups();
-      this.render();
-      return;
-    }
-    if (act === "restore") {
-      const id = this.container.querySelector("#setRestoreSel")?.value || "";
-      if (!id) return;
-      await postJson("/api/ops/restore", { backup_id: id, confirm: "RESTORE" });
-      if (msg) msg.textContent = `Restored ${id}. Reload page to refresh data.`;
-      return;
-    }
-    if (act === "clearDead") {
-      await postJson("/api/ops/danger", {
-        action: "clear_dead_letters", confirm: "I UNDERSTAND",
-      });
-      await refreshStatus(true);
-      if (msg) msg.textContent = "Dead letters cleared.";
-      return;
-    }
-    if (act === "resetSummary") {
-      await postJson("/api/ops/danger", {
-        action: "reset_home_summary", confirm: "I UNDERSTAND",
-      });
-      await refreshHomeData(true);
-      if (msg) msg.textContent = "Home summary reset.";
-      return;
-    }
-    if (act === "retry") {
-      this.loading = true;
-      this.fetchError = null;
-      this.renderLoading();
-      try {
-        await Promise.all([
-          refreshSettings(true),
-          this.refreshV1Settings(),
-        ]);
-        this.loading = false;
-      } catch (err) {
-        this.loading = false;
-        this.fetchError = apiMsg(err) || "Failed to load settings data.";
-      }
-      this.render();
-      return;
-    }
-    if (act === "saveLlm") {
-      try {
-        const providerMode = this.container.querySelector("#setProviderMode")?.value || "ollama";
-        const ollamaUrl = this.container.querySelector("#setOllamaUrl")?.value || "";
-        const chatModel = this.container.querySelector("#setChatModel")?.value || "";
-        const inferModel = this.container.querySelector("#setInferModel")?.value || "";
-        const irisModel = this.container.querySelector("#setIrisModel")?.value || "";
-        await postJson("/api/integrations/state", {
-          integrations: {
-            provider_mode: providerMode,
-            ollama_url: ollamaUrl,
-            chat_model: chatModel,
-            infer_model: inferModel,
-            iris_model: irisModel,
-          },
-        });
-        await refreshSettings(true);
-        await this.refreshIntegrations();
-        this.render();
-        const llmMsg = this.container.querySelector("#setLlmMsg");
-        if (llmMsg) llmMsg.textContent = chatModel ? `Saved. Active: ${chatModel}` : "LLM config saved.";
-      } catch (err) {
-        const llmMsg = this.container.querySelector("#setLlmMsg");
-        if (llmMsg) llmMsg.textContent = `Save failed: ${apiMsg(err)}`;
-      }
-    }
-  }
-
-  onSearch() {}
-  onKey() {}
-  draw() {}
-}
-
 function fmtDelta(v) {
   const n = Number(v || 0);
   const s = n > 0 ? "+" : "";
   return `${s}${n}`;
-}
-
-// ─── Helper: deterministic color per cluster id ───────────────────────────────
-
-function clusterColor(id) {
-  const colors = Object.values(palette);
-  let h = 2166136261;
-  for (const ch of String(id)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
-  return colors[(h >>> 0) % colors.length];
 }
 
 class CanvasMode {
@@ -7166,7 +5872,7 @@ function renderAudienceRail() {
   el.inspector.innerHTML = `
     <section class="rail-card">
       <div class="rail-card-head"><h2 class="rail-head">${esc(top.name || "Audience")}</h2>
-        <span class="rail-chip">${scoreLabel(top.score) || "—"} confidence</span></div>
+        <span class="rail-chip ${scoreTierClass(top.score)}">${scoreLabel(top.score) || "—"} confidence</span></div>
       <div class="rail-aud-main"><b>${scorePct(top.score)}</b><span>Overall impression</span></div>
       <p class="muted">${esc(top.summary || "")}</p>
     </section>
@@ -7184,24 +5890,85 @@ function renderAudienceRail() {
     state.manager.switch("simulations"));
 }
 
-function renderSimulationRail() {
-  const rows = state.audiences.length ? state.audiences : [];
-  const out = rows.slice(0, 4).map(r => {
-    const now = scorePct(r.score);
-    return `<div class="rail-sim-row"><span>${esc(r.name || r.id)}</span>
-      <b>${now}</b><b class="muted">—</b><b class="muted">—</b></div>`;
-  }).join("");
+async function renderSimulationRail() {
+  // Fetch real simulation data if not yet loaded
+  if (!state.simulations.length) {
+    await refreshSimulations(true);
+  }
+  const sims = state.simulations || [];
+  const audById = new Map();
+  for (const a of state.audiences) {
+    audById.set(a.id, a);
+    // Also match by normalized name
+    audById.set((a.name || "").toLowerCase().replace(/\s+/g, "-"), a);
+  }
+
+  // Show honest loading skeleton first
   el.inspector.innerHTML = `
     <section class="rail-card">
       <h2 class="rail-head">Projected outcomes</h2>
-      <p class="muted">How this scenario may shift audience perception.</p>
-      ${out ? `<div class="rail-sim-head"><span>Audience</span><span>Current</span>
-        <span>After</span><span>Delta</span></div>
-      ${out}` : `<p class="muted">No audience data loaded. Run a scan to generate audience signals.</p>`}
+      <div class="cards-loading">
+        <span class="pulse-dot"></span>
+        <span>Loading projections…</span>
+      </div>
     </section>
     <section class="rail-card">
       <h3>Recommended next actions</h3>
-      ${rows.length ? `<p class="muted">Run a full simulation to see recommended next actions.</p>` : `<p class="muted">No audience data available.</p>`}
+      <p class="muted">Loading simulation data…</p>
+    </section>`;
+
+  const matched = [];
+  for (const s of sims) {
+    const audId = s.audience_id || s.audience || "";
+    const audName = s.audience_name || s.name || "";
+    const aud = audById.get(audId)
+      || audById.get(audName.toLowerCase().replace(/\s+/g, "-"));
+    const before = scoreNum(s.before_score ?? s.score);
+    const after = scoreNum(s.after_score);
+    const delta = (after !== null && before !== null) ? (after - before) : null;
+    const deltaStr = delta !== null ? (delta >= 0 ? `+${delta}` : `${delta}`) : "—";
+    const deltaCls = delta !== null ? (delta >= 0 ? "good" : "bad") : "";
+    matched.push({
+      label: aud ? (aud.name || aud.id) : (audName || audId || "Scenario"),
+      before: before !== null ? `${before}%` : "—",
+      after: after !== null ? `${after}%` : "—",
+      delta: deltaStr,
+      deltaCls,
+    });
+  }
+
+  // Fall back to audience-only data if no simulations exist
+  if (!matched.length) {
+    const rows = state.audiences.length ? state.audiences : [];
+    for (const r of rows) {
+      const now = scoreNum(r.score);
+      matched.push({
+        label: r.name || r.id || "",
+        before: now !== null ? `${now}%` : "—",
+        after: "—",
+        delta: "—",
+        deltaCls: "",
+      });
+    }
+  }
+
+  const out = matched.slice(0, 6).map(m => `<div class="rail-sim-row">
+    <span>${esc(m.label)}</span>
+    <b>${m.before}</b><b>${m.after}</b><b class="sim-delta-${m.deltaCls}">${m.delta}</b>
+  </div>`).join("");
+
+  const rows = state.audiences.length ? state.audiences : [];
+  el.inspector.innerHTML = `
+    <section class="rail-card">
+      <h2 class="rail-head">Projected outcomes</h2>
+      <p class="muted">How changes may shift audience perception.</p>
+      ${out ? `<div class="rail-sim-head"><span>Audience</span><span>Current</span>
+        <span>After</span><span>Delta</span></div>
+      ${out}` : `<p class="muted">No projection data available. Run a simulation to see projected perception shifts.</p>`}
+    </section>
+    <section class="rail-card">
+      <h3>Recommended next actions</h3>
+      ${sims.length ? `<p class="muted">Review your saved scenarios for detailed recommendations.</p>` : rows.length ? `<p class="muted">Run a full simulation to see recommended next actions.</p>` : `<p class="muted">No audience data available. Run a scan to generate audience profiles.</p>`}
       <button class="rail-cta" type="button" data-mode-jump="simulations">Open simulator</button>
     </section>`;
 }
@@ -7230,38 +5997,6 @@ function renderExportRail() {
       || "<p class='muted'>No exports yet.</p>"}
     </section>`;
 }
-
-function renderSettingsRail() {
-  const ops = state.manager?.modes?.settings?.ops || {};
-  const runs = Number(ops?.index?.runs_total || 0);
-  const latest = ops?.index?.latest_run || "none";
-  const free = humanSize(Number(ops?.storage?.free_bytes || 0));
-  el.inspector.innerHTML = `
-    <section class="rail-card">
-      <div class="rail-card-head"><h2 class="rail-head">System health</h2>
-        <button class="rail-link">View details</button></div>
-      <div class="rail-type-row"><span>Index service</span><b>${esc(ops?.index?.status || "Unknown")}</b></div>
-      <div class="rail-type-row"><span>Analysis engine</span><b>${esc(ops?.analysis?.status || "Unknown")}</b></div>
-      <div class="rail-type-row"><span>Model status</span><b>${esc(ops?.model?.status || "Unknown")}</b></div>
-      <div class="rail-type-row"><span>Runs</span><b>${runs}</b></div>
-      <div class="rail-type-row"><span>Latest</span><b>${esc(latest)}</b></div>
-      <div class="rail-type-row"><span>Storage free</span><b>${free}</b></div>
-    </section>
-    <section class="rail-card">
-      <h3>Backup & restore</h3>
-      <div class="rail-file-row"><span>Last backup</span><b>${esc(ops?.backup?.last || "Never")}</b></div>
-      <div class="rail-file-row"><span>Auto-backup</span><b>${esc(ops?.backup?.schedule || "Off")}</b></div>
-      <div class="rail-file-row"><span>Restore from backup</span><b>${ops?.backup?.restore_available ? "Available" : "Not configured"}</b></div>
-    </section>
-    <section class="rail-card rail-danger">
-      <h3>Danger zone</h3>
-      <div class="rail-file-row"><span>Rebuild index</span><b>Rebuild</b></div>
-      <div class="rail-file-row"><span>Clear cache</span><b>Clear</b></div>
-      <div class="rail-file-row"><span>Forget this device</span><b>Forget</b></div>
-    </section>`;
-}
-
-let _contradictionCache = null;
 
 async function renderContradictionRail() {
   // Show loading skeleton while fetching
@@ -7621,9 +6356,9 @@ async function showClaimsModal(ws) {
       body.innerHTML = `<p class="muted">No inference claims found for "${esc(name)}". Run an audit to generate claims.</p>`;
       return;
     }
-    const lensNames = {"recruiter":"Recruiter","investor":"Investor","admissions":"Admissions",
-      "creator":"Creator","stranger":"Stranger","customer":"Customer","collaborator":"Collaborator",
-      "ad_platform":"Ad Platform","future_agent":"Future AI"};
+    const lensNames = {"recruiter":"Recruiter","investor":"Investor","collaborator":"Collaborator",
+      "creator":"Creator","privacy":"Privacy","platform":"Platform",
+      "search":"Search","institution":"Institution","stranger":"Stranger"};
     let html = "";
     for (const [lens, lensClaims] of Object.entries(byLens)) {
       const lname = lensNames[lens] || lens;
@@ -7695,24 +6430,12 @@ async function openAudienceModal(audId = "recruiter") {
   }
 }
 
-function fileRow(n) {
-  return `<div class="stat-row ana-row" data-nid="${esc(n.id)}" style="cursor:pointer">
-    <span title="${esc(n.path)}">${esc(n.label.slice(0,26))}</span>
-    <b>${humanSize(n.size)}</b></div>`;
-}
-
-function catRow([cat, val]) {
-  return `<div class="stat-row"><span style="color:${palette[cat]}">${cat}</span><b>${val.toLocaleString()}</b></div>`;
-}
-
 function renderFile(n) {
   const wsMode = state.manager?.modes?.workstreams;
   const ws = wsMode?.workstreams?.find(w => w.id === n.cluster);
-  const colorMap = { blue:"#5b9cf6", teal:"#2dd4bf", amber:"#fbbf24",
-                     coral:"#f87171", purple:"#a78bfa", gray:"#6b7280" };
   const wsRow = ws
     ? `<div class="stat-row"><span>Workstream</span>
-         <b style="color:${colorMap[ws.color]||colorMap.blue};font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ws.name)}</b></div>`
+         <b style="color:var(--blue,#5b9cf6);font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ws.name)}</b></div>`
     : "";
   const tagsHtml = (n.tags||[]).length
     ? `<div style="margin:8px 0;display:flex;flex-wrap:wrap;gap:4px">${n.tags.map(t=>`<span class="ws-topic">${esc(t)}</span>`).join("")}</div>`
@@ -8767,6 +7490,13 @@ function esc(s) {
   }[ch]));
 }
 
+function escAttr(s) {
+  // Escape for HTML attribute values
+  return String(s).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
+
 function scorePct(v) {
   // Honest score display: null/undefined → "--", otherwise → "N%"
   if (v === null || v === undefined || (typeof v === "number" && isNaN(v))) return "--";
@@ -8783,7 +7513,14 @@ function scoreLabel(v) {
   // Honest confidence label: only when real data exists
   const n = scoreNum(v);
   if (n === null) return "";
-  return n >= 75 ? "High" : n >= 50 ? "Moderate" : "Watch";
+  return n >= 75 ? "High" : n >= 50 ? "Moderate" : "Developing";
+}
+
+function scoreTierClass(v) {
+  // Returns CSS class for tier color: tier-high, tier-moderate, tier-developing
+  const n = scoreNum(v);
+  if (n === null) return "tier-developing";
+  return n >= 75 ? "tier-high" : n >= 50 ? "tier-moderate" : "tier-developing";
 }
 
 function apiCode(err) {
@@ -8795,17 +7532,6 @@ function apiMsg(err) {
   if (!err) return "unknown error";
   if (typeof err === "string") return err;
   return String(err.apiMsg || err.message || "unknown error");
-}
-
-function assistantErr(err) {
-  const code = apiCode(err);
-  if (code === "unknown_node") {
-    return "I lost file context. Select a file in the map and ask again.";
-  }
-  if (code === "scan_already_running") {
-    return "A scan is already running. I can keep helping while it runs.";
-  }
-  return `Iris request failed: ${apiMsg(err)}`;
 }
 
 function mkApiErr(msg, code = "", status = 0) {
@@ -9425,162 +8151,609 @@ async function postJson(url, data) {
 })();
 
 // ─── OnboardingMode ───────────────────────────────────────────────────────────
-// 7-step white frost-glass onboarding overlay.  Appears on first visit when
-// no user profile exists.  Uses the existing app shell, calls real
-// /api/v1/onboarding endpoints, and persists state through the V1 API.
-
-// ── Streamlined onboarding (3 steps: welcome → scan → done) ───────────
+// 8-step onboarding state machine with full step persistence.
+// Steps: 1=Welcome, 2=Profile, 3=DataScope, 4=SourceApproval,
+//        5=AudienceSelection, 6=InferenceMode, 7=ModelCheck, 8=RunAudit.
+// State is persisted via GET/POST /api/v1/onboarding (server.py §7).
+// Survives refresh — mount() restores from backend.
 
 class OnboardingMode {
   constructor() {
     this.container = null;
-    this.step = 1;
+    this.step = 1;                // 1-8
     this.completed = false;
-    this.scanning = false;
-    this.fileCount = 0;
-    this.scanError = null;
+    this.loading = false;         // true while saving/loading state
     this._onClick = ev => this.onClick(ev);
+    this._onInput = ev => this.onInput(ev);
+    this._onCheck = ev => this.onCheckbox(ev);
+
+    // Mutable state that persists via profile payload
+    this.profileName = "";
+    this.profileHandle = "";
+    this.profileGoal = "";
+    this.profileWorkspace = "";
+    this.workstreams = [];            // [{id, name, file_count, folders, ...}]
+    this.selectedWorkstreams = {};    // {id: true}
+    this.consentCheck = {};           // {id: true} — per-source consent
+    this.audiences = [];              // [{id, name, icon, score, tier}]
+    this.selectedAudiences = [];      // [lens_id, ...]
+    this.auditMode = "standard";     // "quick" | "standard" | "deep"
+    this.ollamaOnline = null;        // null=unknown, true/false
+    this.ollamaModel = "";           // installed model name
+
+    // Scan & audit progress
+    this.scanRunning = false;
+    this.auditRunning = false;
+    this.progressMsg = "";
+    this.claimCount = 0;
+    this.riskCount = 0;
+    this.repairCount = 0;
+    this.errorMsg = "";
   }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────
 
   async mount(container) {
     this.container = container;
-    this.step = 1;
+    this.loading = true;
+    this.render();                    // show loader
+    await this.restoreState();        // fetch from backend
+    this.loading = false;
     this.render();
   }
 
   unmount() {
     this.container?.removeEventListener("click", this._onClick);
+    this.container?.removeEventListener("input", this._onInput);
+    this.container?.removeEventListener("change", this._onCheck);
     if (this.container) this.container.innerHTML = "";
   }
+
+  // ── Event delegation ──────────────────────────────────────────────────
 
   onClick(ev) {
     const btn = ev.target.closest("[data-onb]");
     if (!btn) return;
-    switch (btn.dataset.onb) {
-      case "start": return this.startScan();
-      case "skip":  return this.finish();
-      case "done":  return this.finish();
+    const action = btn.dataset.onb;
+    switch (action) {
+      case "next":      return this.advanceStep();
+      case "back":      return this.goBack();
+      case "skip":      return this.finish();
+      case "done":      return this.finish();
+      case "start-audit": return this.startAudit();
+      case "retry":      return this.retryStep();
+      case "select-all": return this.toggleAllWorkstreams(true);
+      case "deselect-all": return this.toggleAllWorkstreams(false);
+      case "toggle-audience": return this.toggleAudience(btn.dataset.aid);
+      case "set-mode":   return this.setAuditMode(btn.dataset.mode);
+      case "check-ollama": return this.checkOllama();
     }
   }
 
-  async startScan() {
-    if (this.scanning) return;
-    this.scanning = true;
-    this.scanError = null;
-    this.step = 2;
-    this.render();
-    // Start the real scan
+  onInput(ev) {
+    const inp = ev.target.closest("[data-onb-field]");
+    if (!inp) return;
+    const field = inp.dataset.onbField;
+    if (field === "name") this.profileName = inp.value;
+    else if (field === "handle") this.profileHandle = inp.value;
+    else if (field === "goal") this.profileGoal = inp.value;
+    else if (field === "workspace") this.profileWorkspace = inp.value;
+  }
+
+  onCheckbox(ev) {
+    const cb = ev.target.closest("[data-onb-ws]");
+    if (!cb) return;
+    const id = cb.dataset.onbWs;
+    this.selectedWorkstreams[id] = cb.checked;
+    this.consentCheck[id] = cb.checked;
+  }
+
+  // ── State persistence ─────────────────────────────────────────────────
+
+  async restoreState() {
     try {
-      await postJson("/api/scan", { folders: [state.homeData?.home || "~"] });
-    } catch (err) {
-      console.warn("Onboard scan trigger failed:", err);
-      this.scanError = err.message || String(err);
-      this.scanning = false;
-      this.render();
-      return;
-    }
-    // Poll for results — the scan + audit may take a moment
-    this.pollResults();
-  }
-
-  async pollResults() {
-    let consecutiveErrors = 0;
-    for (let i = 0; i < 60; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      try {
-        const data = await getJson("/api/v1/status");
-        consecutiveErrors = 0;
-        this.fileCount = data.claims || data.reports || data.risks || 0;
-        if (this.fileCount > 10 || data.status === "running" && data.reports > 0) {
-          // Scan complete, transition to done
-          this.step = 3;
-          this.render();
-          await new Promise(r => setTimeout(r, 1500));
-          await this.finish();
-          return;
-        }
-      } catch (_) {
-        consecutiveErrors++;
-      }
-      // If we get too many consecutive errors, show error state
-      if (consecutiveErrors >= 5) {
-        this.scanError = "Could not reach audit engine. Check that the backend is running.";
-        this.scanning = false;
-        this.render();
+      const data = await getJson("/api/v1/onboarding");
+      if (data.completed) {
+        this.completed = true;
+        localStorage.setItem("optic_onboarded", "1");
+        state.manager.switch("workstreams");
         return;
       }
-      // Update progress
-      const el = this.container?.querySelector(".onb-progress-count");
-      if (el) el.textContent = `Scanned ${Math.min(i * 200, 6000).toLocaleString()} files…`;
+      const step = data.step || 1;
+      // Clamp to 1-8
+      this.step = Math.max(1, Math.min(8, step));
+      const p = data.profile || {};
+      this.profileName = p.name || "";
+      this.profileHandle = p.handle || "";
+      this.profileGoal = p.goal || "";
+      this.profileWorkspace = p.workspace || "";
+      this.selectedWorkstreams = p.selectedWorkstreams || {};
+      this.consentCheck = p.consentCheck || {};
+      this.selectedAudiences = p.selectedAudiences || [];
+      this.auditMode = p.auditMode || "standard";
+      this.ollamaOnline = p.ollamaOnline;
+      this.ollamaModel = p.ollamaModel || "";
+      this.claimCount = p.claimCount || 0;
+    } catch (e) {
+      // Offline / backend down — use defaults, start at step 1
+      console.warn("Onboarding restore failed, starting fresh:", e);
+      this.step = 1;
     }
-    // Polling timed out — still transition
-    this.step = 3;
+  }
+
+  async saveState() {
+    try {
+      await postJson("/api/v1/onboarding", {
+        step: this.step,
+        profile: {
+          name: this.profileName,
+          handle: this.profileHandle,
+          goal: this.profileGoal,
+          workspace: this.profileWorkspace,
+          selectedWorkstreams: this.selectedWorkstreams,
+          consentCheck: this.consentCheck,
+          selectedAudiences: this.selectedAudiences,
+          auditMode: this.auditMode,
+          ollamaOnline: this.ollamaOnline,
+          ollamaModel: this.ollamaModel,
+          claimCount: this.claimCount,
+        },
+      });
+    } catch (e) {
+      // Non-fatal — onboarding continues even if saving fails
+      console.warn("Onboarding save failed:", e);
+    }
+  }
+
+  // ── Step navigation ───────────────────────────────────────────────────
+
+  async advanceStep() {
+    this.step = Math.min(8, this.step + 1);
+    await this.saveState();
+
+    // Pre-fetch data needed for upcoming steps
+    if (this.step === 4) await this.fetchWorkstreams();
+    if (this.step === 5) await this.fetchAudiences();
     this.render();
-    await new Promise(r => setTimeout(r, 1200));
-    await this.finish();
+  }
+
+  async goBack() {
+    this.step = Math.max(1, this.step - 1);
+    await this.saveState();
+    this.render();
+  }
+
+  async retryStep() {
+    this.errorMsg = "";
+    this.scanRunning = false;
+    this.auditRunning = false;
+    await this.saveState();
+    this.render();
   }
 
   async finish() {
     this.completed = true;
+    this.step = 8;
+    await this.saveState();
     localStorage.setItem("optic_onboarded", "1");
     state.manager.switch("workstreams");
   }
+
+  // ── Data fetching ─────────────────────────────────────────────────────
+
+  async fetchWorkstreams() {
+    try {
+      const data = await getJson("/api/workstreams");
+      this.workstreams = (data.workstreams || []).map(w => ({
+        id: w.id || w.name || "",
+        name: w.name || w.id || "",
+        file_count: w.file_count || w.files || 0,
+        size: w.size || 0,
+        folders: w.folders || [],
+        topics: w.topics || [],
+        summary: w.summary || "",
+      }));
+      // Auto-select all if nothing selected yet
+      if (!Object.keys(this.selectedWorkstreams).length) {
+        this.workstreams.forEach(w => { this.selectedWorkstreams[w.id] = true; });
+      }
+    } catch (e) {
+      console.warn("Workstreams fetch failed:", e);
+      this.workstreams = [];
+    }
+  }
+
+  async fetchAudiences() {
+    try {
+      // Try V1 endpoint first, fall back to legacy
+      let data;
+      try { data = await getJson("/api/v1/audiences"); } catch (_) {
+        try { data = await getJson("/api/audiences"); } catch (_2) { data = null; }
+      }
+      // Normalize: both return {audiences: [...]}
+      this.audiences = (data?.audiences || []).map(a => ({
+        id: a.id || a.audience_id || "",
+        name: a.name || a.id || "",
+        icon: a.icon || "👁",
+        score: a.score || 0,
+        tier: a.tier || "",
+      }));
+      if (!this.selectedAudiences.length && this.audiences.length) {
+        this.selectedAudiences = this.audiences.map(a => a.id);
+      }
+    } catch (e) {
+      console.warn("Audiences fetch failed:", e);
+      this.audiences = [];
+    }
+  }
+
+  async checkOllama() {
+    this.ollamaOnline = null;
+    this.render();
+    try {
+      const data = await getJson("/api/v1/status");
+      this.ollamaOnline = data?.ollama_running === true || data?.ollama === true;
+      this.ollamaModel = data?.model || data?.ollama_model || (this.ollamaOnline ? "phi4-mini" : "");
+    } catch (e) {
+      try {
+        // fallback: try Ollama directly
+        const res = await fetch("http://localhost:11434/api/tags");
+        const body = await res.json();
+        const models = body.models || [];
+        this.ollamaOnline = models.length > 0;
+        this.ollamaModel = models[0]?.name || "";
+      } catch (_) {
+        this.ollamaOnline = false;
+        this.ollamaModel = "";
+      }
+    }
+    await this.saveState();
+    this.render();
+  }
+
+  // ── Toggles ───────────────────────────────────────────────────────────
+
+  toggleAllWorkstreams(select) {
+    this.workstreams.forEach(w => {
+      this.selectedWorkstreams[w.id] = select;
+      this.consentCheck[w.id] = select;
+    });
+    this.render();
+  }
+
+  toggleAudience(aid) {
+    const idx = this.selectedAudiences.indexOf(aid);
+    if (idx >= 0) this.selectedAudiences.splice(idx, 1);
+    else this.selectedAudiences.push(aid);
+    this.render();
+  }
+
+  setAuditMode(mode) {
+    this.auditMode = mode;
+    this.render();
+  }
+
+  // ── Audit execution ───────────────────────────────────────────────────
+
+  async startAudit() {
+    this.scanRunning = true;
+    this.auditRunning = false;
+    this.progressMsg = "Starting filesystem scan…";
+    this.errorMsg = "";
+    this.render();
+
+    // Step 1: Trigger scan
+    try {
+      await postJson("/api/scan", { folders: [state.homeData?.home || "~"] });
+    } catch (err) {
+      this.errorMsg = "Scan trigger failed: " + (err.message || String(err));
+      this.scanRunning = false;
+      this.render();
+      return;
+    }
+
+    // Step 2: Poll scan status
+    this.progressMsg = "Scanning filesystem…";
+    this.render();
+    let scanDone = false;
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const st = await getJson("/api/status");
+        if (st.status === "idle" || st.status === "complete" || (st.files && st.files > 0)) {
+          scanDone = true;
+          break;
+        }
+        if (st.files) this.progressMsg = `Scanned ${st.files.toLocaleString()} files…`;
+        else if (st.scanned) this.progressMsg = `Scanned ${st.scanned.toLocaleString()} files…`;
+        else this.progressMsg = `Scanning… (${i + 1}s)`;
+        this.render();
+      } catch (_) { /* keep polling */ }
+    }
+
+    if (!scanDone) {
+      this.progressMsg = "Scan timed out, proceeding anyway…";
+    }
+
+    // Step 3: Trigger audit
+    this.auditRunning = true;
+    this.progressMsg = "Running inference audit…";
+    this.render();
+
+    try {
+      await postJson("/api/v1/audit/general", {});
+    } catch (_) {
+      // GET also triggers audit
+      try { await getJson("/api/v1/audit/general"); } catch (_2) {}
+    }
+
+    // Step 4: Poll audit results
+    for (let i = 0; i < 90; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const ad = await getJson("/api/v1/status");
+        this.claimCount = ad.claim_count || ad.claims || 0;
+        this.riskCount = ad.risk_count || ad.risks || 0;
+        this.repairCount = ad.repair_count || ad.repairs || 0;
+        this.progressMsg = `Claims: ${this.claimCount}  ·  Risks: ${this.riskCount}  ·  Repairs: ${this.repairCount}`;
+        if (this.claimCount > 0 || (ad.status === "complete" || ad.status === "idle")) {
+          if (ad.status === "running") continue; // still running
+          break;
+        }
+      } catch (_) { /* keep polling */ }
+      this.render();
+    }
+
+    this.scanRunning = false;
+    this.auditRunning = false;
+    this.render();
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────
 
   render() {
     if (!this.container) return;
     this.container.removeEventListener("click", this._onClick);
     this.container.addEventListener("click", this._onClick, { once: false });
+    this.container.removeEventListener("input", this._onInput);
+    this.container.addEventListener("input", this._onInput);
+    this.container.removeEventListener("change", this._onCheck);
+    this.container.addEventListener("change", this._onCheck);
 
-    if (this.step === 1) {
-      // Welcome
-      this.container.innerHTML = `<div class="onb-overlay">
-        <div class="onb-card glass" style="max-width:540px">
-          <div class="onb-brand">Optic</div>
-          <h2 class="onb-title">Understand what your files reveal</h2>
-          <p>Optic scans your local files to surface what humans and algorithms can infer about you. Everything stays on-device — nothing is ever uploaded.</p>
-          <div class="onb-features">
-            <span>🔒 Private & local</span>
-            <span>📊 9 audience lenses</span>
-            <span>⚡ Instant scan</span>
-          </div>
-          <button class="onb-cta" data-onb="start">Scan my files →</button>
-          <button class="onb-link" data-onb="skip">Skip for now</button>
-        </div>
-      </div>`;
-    } else if (this.step === 2) {
-      // Scanning
-      if (this.scanError) {
-        // Error state
-        this.container.innerHTML = `<div class="onb-overlay">
-          <div class="onb-card glass" style="max-width:480px;text-align:center">
-            <div class="onb-err-icon">⚠️</div>
-            <h2 class="onb-title">Scan failed</h2>
-            <p class="onb-err-msg">${esc(this.scanError)}</p>
-            <button class="onb-cta" data-onb="start">Try again</button>
-            <button class="onb-link" data-onb="skip">Skip for now</button>
-          </div>
-        </div>`;
-        return;
-      }
+    if (this.loading) {
       this.container.innerHTML = `<div class="onb-overlay">
         <div class="onb-card glass" style="max-width:480px;text-align:center">
           <div class="onb-spinner"></div>
-          <h2 class="onb-title">Scanning your files</h2>
-          <p>Reading from Desktop, Documents, and Downloads...</p>
-          <div class="onb-progress-bar"><div class="onb-progress-fill"></div></div>
-          <p class="onb-progress-count">Starting scan…</p>
+          <p style="color:var(--muted)">Loading…</p>
         </div>
       </div>`;
-    } else {
-      // Done
-      this.container.innerHTML = `<div class="onb-overlay">
-        <div class="onb-card glass" style="max-width:480px;text-align:center">
-          <div class="onb-check">✓</div>
-          <h2 class="onb-title">Analysis complete</h2>
-          <p>${this.fileCount.toLocaleString()} inference claims generated from your files. Your dashboard is ready.</p>
-          <button class="onb-cta" data-onb="done">See my results →</button>
-        </div>
-      </div>`;
+      return;
     }
+
+    const totalSteps = 8;
+    const progressPct = Math.round((this.step / totalSteps) * 100);
+    const progressBar = this._progressBar();
+
+    let body = "";
+    switch (this.step) {
+      case 1: body = this._renderWelcome(); break;
+      case 2: body = this._renderProfile(); break;
+      case 3: body = this._renderScope();   break;
+      case 4: body = this._renderSources(); break;
+      case 5: body = this._renderAudiences(); break;
+      case 6: body = this._renderMode();     break;
+      case 7: body = this._renderModelCheck(); break;
+      case 8: body = this._renderRun();      break;
+    }
+
+    this.container.innerHTML = `<div class="onb-overlay">
+      <div class="onb-card onb-card-step" style="max-width:580px">
+        <div class="onb-brand">Optic</div>
+        ${progressBar}
+        ${body}
+        ${this._stepNav()}
+      </div>
+    </div>`;
+  }
+
+  _progressBar() {
+    const total = 8;
+    const pct = Math.round((this.step / total) * 100);
+    const dots = [];
+    for (let i = 1; i <= total; i++) {
+      let cls = "onb-dot";
+      if (i === this.step) cls += " onb-dot-active";
+      else if (i < this.step) cls += " onb-dot-done";
+      dots.push(`<div class="${cls}"></div>`);
+    }
+    return `<div class="onb-progress-wrap">
+      <div class="onb-progress-track"><div class="onb-progress-fill" style="width:${pct}%"></div></div>
+      <div class="onb-dots">${dots.join("")}</div>
+      <div class="onb-step-label">Step ${this.step} of ${total}</div>
+    </div>`;
+  }
+
+  _stepNav() {
+    if (this.step === 8) return "";
+    const backBtn = this.step > 1
+      ? `<button class="onb-ghost" data-onb="back">← Back</button>` : "";
+    const skipBtn = this.step < 8
+      ? `<button class="onb-link" data-onb="skip" style="font-size:12px;margin-top:10px">Skip for now</button>` : "";
+    const nextLabel = this.step === 7 ? "Start audit →" : "Continue →";
+    const nextBtn = `<button class="onb-primary" data-onb="next">${nextLabel}</button>`;
+    return `<div class="onb-actions">${backBtn}${nextBtn}</div>${skipBtn}`;
+  }
+
+  // ── Step renderers ────────────────────────────────────────────────────
+
+  _renderWelcome() {
+    return `<h2 class="onb-heading">Welcome to Optic</h2>
+      <p class="onb-desc">Optic is a <strong>local-first self-audit</strong> tool — not a third-party evaluator. It scans your files to surface what humans and algorithms can infer <em>about you</em>, so you can understand and control your digital footprint.</p>
+      <div class="onb-shield">
+        <ul class="onb-privacy-list">
+          <li>Everything stays <strong>on-device</strong></li>
+          <li>No data is ever uploaded</li>
+          <li>You control what gets analyzed</li>
+          <li>9 audience lenses to see what others see</li>
+        </ul>
+      </div>`;
+  }
+
+  _renderProfile() {
+    return `<h2 class="onb-heading">Your local profile</h2>
+      <p class="onb-desc">Create a lightweight local profile. This helps Optic tailor the analysis — it never leaves your machine.</p>
+      <div class="onb-row"><label class="onb-label">Display name</label>
+        <input class="onb-input" data-onb-field="name" value="${escAttr(this.profileName)}" placeholder="e.g. Alex" autofocus></div>
+      <div class="onb-row"><label class="onb-label">Handle (optional)</label>
+        <input class="onb-input" data-onb-field="handle" value="${escAttr(this.profileHandle)}" placeholder="e.g. @alex"></div>
+      <div class="onb-row"><label class="onb-label">Goal (optional)</label>
+        <input class="onb-input" data-onb-field="goal" value="${escAttr(this.profileGoal)}" placeholder="e.g. Understand my public GitHub presence"></div>
+      <div class="onb-row"><label class="onb-label">Workspace name</label>
+        <input class="onb-input" data-onb-field="workspace" value="${escAttr(this.profileWorkspace)}" placeholder="e.g. My Projects"></div>`;
+  }
+
+  _renderScope() {
+    const home = state.homeData?.home || "~";
+    const fileCount = state.homeData?.source_count || 0;
+    const wsCount = state.homeData?.workstream_count || 0;
+    const expCount = state.homeData?.exposure_count || 0;
+    const narratives = (state.homeData?.narratives || []).slice(0, 4);
+    return `<h2 class="onb-heading">What Optic found</h2>
+      <p class="onb-desc">From your local filesystem at <code>${esc(home)}</code>:</p>
+      <div class="onb-stats">
+        <div class="onb-stat"><span class="onb-stat-num">${fileCount.toLocaleString()}</span><span class="onb-stat-label">files indexed</span></div>
+        <div class="onb-stat"><span class="onb-stat-num">${wsCount}</span><span class="onb-stat-label">workstreams</span></div>
+        <div class="onb-stat"><span class="onb-stat-num">${expCount}</span><span class="onb-stat-label">exposures</span></div>
+      </div>
+      ${narratives.length ? `<div class="onb-narratives"><strong>Detected narratives:</strong> ${narratives.map(n => `<span class="onb-tag">${esc(n)}</span>`).join(" ")}</div>` : ""}
+      <p class="onb-desc" style="margin-top:14px">Next, you'll approve which sources to include and who might be "reading" your digital surface.</p>`;
+  }
+
+  _renderSources() {
+    if (!this.workstreams.length) {
+      return `<h2 class="onb-heading">Workstreams</h2>
+        <p class="onb-desc">Fetching workstream data…</p>
+        <div class="onb-spinner" style="margin:20px auto"></div>`;
+    }
+    const selCount = Object.values(this.selectedWorkstreams).filter(Boolean).length;
+    const rows = this.workstreams.map(w => {
+      const checked = this.selectedWorkstreams[w.id] ? "checked" : "";
+      const folders = (w.folders || []).slice(0, 2).join(", ");
+      return `<label class="onb-check onb-check-ws">
+        <input type="checkbox" data-onb-ws="${escAttr(w.id)}" ${checked}>
+        <span class="onb-check-body">
+          <strong>${esc(w.name)}</strong>
+          <span class="onb-meta">${w.file_count} files${folders ? " · " + esc(folders) : ""}</span>
+        </span>
+      </label>`;
+    }).join("");
+    return `<h2 class="onb-heading">Approve sources</h2>
+      <p class="onb-desc">Select which workstreams to include in your audit. Each selection creates a <strong>consent receipt</strong> — you can revoke access later.</p>
+      <div class="onb-toolbar">
+        <button class="onb-link" data-onb="select-all">Select all</button>
+        <button class="onb-link" data-onb="deselect-all">Deselect all</button>
+      </div>
+      <div class="onb-ws-list">${rows}</div>
+      <p class="onb-meta" style="text-align:center;margin-top:8px">${selCount} of ${this.workstreams.length} workstreams selected</p>`;
+  }
+
+  _renderAudiences() {
+    if (!this.audiences.length) {
+      return `<h2 class="onb-heading">Audience lenses</h2>
+        <p class="onb-desc">Loading audience configurations…</p>
+        <div class="onb-spinner" style="margin:20px auto"></div>`;
+    }
+    const tags = this.audiences.map(a => {
+      const active = this.selectedAudiences.includes(a.id);
+      const cls = active ? "onb-tag onb-tag-active" : "onb-tag";
+      return `<button class="${cls}" data-onb="toggle-audience" data-aid="${escAttr(a.id)}">
+        <span class="onb-tag-icon">${esc(a.icon)}</span> ${esc(a.name)}
+        ${a.tier ? `<span class="onb-tag-tier">${esc(a.tier)}</span>` : ""}
+      </button>`;
+    }).join("");
+    const selCount = this.selectedAudiences.length;
+    return `<h2 class="onb-heading">Who's reading?</h2>
+      <p class="onb-desc">Choose audience lenses. Each lens applies different priorities and evidence preferences. You can change these later.</p>
+      <div class="onb-tags">${tags}</div>
+      <p class="onb-meta" style="text-align:center;margin-top:10px">${selCount} of ${this.audiences.length} lenses selected</p>`;
+  }
+
+  _renderMode() {
+    const modes = [
+      { id: "quick", label: "Quick", desc: "Metadata-heavy, fewer cards, fast" },
+      { id: "standard", label: "Standard", desc: "Balanced: all lenses, contradictions, risks, repairs" },
+      { id: "deep", label: "Deep", desc: "Full cross-workstream linking, stronger contradiction pass" },
+    ];
+    const radios = modes.map(m => {
+      const sel = this.auditMode === m.id ? "checked" : "";
+      return `<label class="onb-check onb-check-mode ${sel ? "onb-check-sel" : ""}">
+        <input type="radio" name="auditMode" data-onb="set-mode" data-mode="${m.id}" ${sel}>
+        <span class="onb-check-body"><strong>${m.label}</strong><span class="onb-meta">${m.desc}</span></span>
+      </label>`;
+    }).join("");
+    return `<h2 class="onb-heading">Audit depth</h2>
+      <p class="onb-desc">How thorough should the initial audit be?</p>
+      <div class="onb-mode-list">${radios}</div>`;
+  }
+
+  _renderModelCheck() {
+    if (this.ollamaOnline === null) {
+      return `<h2 class="onb-heading">Model check</h2>
+        <p class="onb-desc">Checking if Ollama is available on this machine…</p>
+        <div class="onb-status"><div class="onb-spinner" style="margin:16px auto"></div>
+          <button class="onb-primary" data-onb="check-ollama" style="margin-top:12px;width:180px">Check now</button>
+        </div>`;
+    }
+    if (this.ollamaOnline) {
+      return `<h2 class="onb-heading">Model ready ✓</h2>
+        <p class="onb-desc">Ollama is running. Model: <strong>${esc(this.ollamaModel || "phi4-mini")}</strong></p>
+        <div class="onb-status onb-status-ok">🟢 Connected — local inference available</div>`;
+    }
+    return `<h2 class="onb-heading">Model unavailable</h2>
+      <p class="onb-desc">Ollama is not detected. Non-LLM structural views will still work, but narrative generation and Iris chat will be limited.</p>
+      <div class="onb-status onb-status-warn">🟡 Limited mode — start Ollama or install phi4-mini to enable full analysis</div>`;
+  }
+
+  _renderRun() {
+    if (this.errorMsg) {
+      return `<h2 class="onb-heading">Something went wrong</h2>
+        <p class="onb-desc">${esc(this.errorMsg)}</p>
+        <button class="onb-primary" data-onb="retry" style="width:180px">Try again</button>
+        <button class="onb-link" data-onb="skip" style="margin-top:10px">Skip for now</button>`;
+    }
+
+    if (this.scanRunning || this.auditRunning) {
+      const ring = `<div class="onb-progress-ring">
+        <svg width="80" height="80" viewBox="0 0 80 80"><circle cx="40" cy="40" r="30" fill="none" stroke="var(--line-lo)" stroke-width="4"/><circle cx="40" cy="40" r="30" fill="none" stroke="var(--accent)" stroke-width="4" stroke-dasharray="${this.auditRunning ? '140' : '70'} 190" stroke-linecap="round"/></svg>
+        <div class="onb-ring-label">${this.auditRunning ? 'Auditing' : 'Scanning'}</div>
+      </div>`;
+      return `<h2 class="onb-heading">${this.auditRunning ? 'Running audit' : 'Scanning files'}</h2>
+        <p class="onb-desc">${esc(this.progressMsg)}</p>
+        ${ring}
+        <p class="onb-status-text">This may take a minute…</p>`;
+    }
+
+    if (this.claimCount > 0) {
+      return `<div class="onb-checkmark">✓</div>
+        <h2 class="onb-heading">Analysis complete</h2>
+        <div class="onb-stats">
+          <div class="onb-stat"><span class="onb-stat-num">${this.claimCount.toLocaleString()}</span><span class="onb-stat-label">claims</span></div>
+          <div class="onb-stat"><span class="onb-stat-num">${this.riskCount}</span><span class="onb-stat-label">risks</span></div>
+          <div class="onb-stat"><span class="onb-stat-num">${this.repairCount}</span><span class="onb-stat-label">repairs</span></div>
+        </div>
+        <p class="onb-desc">${this.selectedAudiences.length} audience lenses applied · ${Object.values(this.selectedWorkstreams).filter(Boolean).length} sources analyzed</p>
+        <button class="onb-primary" data-onb="done" style="margin-top:8px">See my results →</button>`;
+    }
+
+    // Ready to run
+    const selWs = Object.values(this.selectedWorkstreams).filter(Boolean).length;
+    const selAu = this.selectedAudiences.length;
+    return `<h2 class="onb-heading">Ready to begin</h2>
+      <div class="onb-summary">
+        <p><strong>${esc(this.profileName || 'User')}</strong>${this.profileHandle ? ` · ${esc(this.profileHandle)}` : ''}</p>
+        <p>${selWs} workstreams · ${selAu} audience lenses · ${this.auditMode} depth</p>
+      </div>
+      <p class="onb-desc">Your audit will analyze approved workstreams through your selected audience lenses. Everything stays on-device.</p>
+      <button class="onb-primary" data-onb="start-audit">Run audit →</button>`;
   }
 }

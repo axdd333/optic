@@ -1,8 +1,7 @@
-import sys, traceback
+import sys
+sys.path.insert(0, "src")
 try:
-    from src.ctxorg import server
-    print("Server module imported successfully")
-    print(f"V1_DB path: {server._V1_DB}")
-    print(f"V1_AVAILABLE: {server._V1_AVAILABLE}")
+    import ctxorg.server
+    print("server.py imports OK")
 except Exception as e:
-    traceback.print_exc()
+    print(f"ERROR: {e}")

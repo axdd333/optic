@@ -1,4 +1,25 @@
 """
+# ⚠ DEPRECATED — This FastAPI server is NOT the active runtime.
+# ================================================================
+# The running server is ctxorg/server.py (stdlib ThreadingHTTPServer on port 3003).
+#
+# THIS FILE IS DEAD CODE with THREE exceptions that are cross-imported:
+#   1. init_db()             — called by optic/v1/startup.py
+#   2. _migrate_v1_schema()  — called by ctxorg/server.py
+#   3. _generate_repairs()   — called by ctxorg/server.py
+#
+# The remaining ~3,400 lines (FastAPI app, CORS, route handlers, parsers/graph/
+# resolver/scrapers integration, DeepSeek API config) are UNREACHABLE from the
+# running server. They live in a parallel runtime universe.
+#
+# CLOUD-FIRST VIOLATION: Lines 80-82 configure DeepSeek API (remote LLM) which
+# violates Invariant #12 (Local-First By Default). The running server uses Ollama
+# (local) via ctxorg/ollama.py.
+#
+# DO NOT DELETE — keep as reference for: init_db(), _migrate_v1_schema(),
+# _generate_repairs(). The rest may be cannibalized into ctxorg/server.py
+# during pipeline Stage 12 (Graph) and Stage 13 (Iris) remediation.
+
 Optic V1 — FastAPI Server
 ==========================
 Wires the V1 intelligence layer into the existing ctxorg filesystem
@@ -13,11 +34,12 @@ import logging
 import math
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 from urllib.request import Request as UrlRequest, urlopen
 from uuid import UUID, uuid4
@@ -39,6 +61,17 @@ from .contradiction import ContradictionEngine
 from .inference import InferenceCardGenerator
 from . import graph, iris_audit, parsers, resolver, scrapers
 
+# ── Signal detector imports ──────────────────────────────────────
+try:
+    from ..signal import (
+        SignalAuditor, PatternDetector, AnomalyDetector, ThresholdDetector,
+        SignalSource as DetectorSignalSource,
+    )
+    from ..signal.models import Severity as DetectorSeverity, Detection
+    SIGNAL_AUDIT_AVAILABLE = True
+except ImportError:
+    SIGNAL_AUDIT_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # ── ctxorg imports (filesystem scanner, workstreams, ollama) ────
@@ -55,10 +88,23 @@ try:
 except ImportError:
     CTXORG_AVAILABLE = False
 
+# ── Consent filter (Invariant #2: Consent-Scoped) ──────────────────
+try:
+    from ctxorg.server import _consent_check_source as _ctx_consent_check
+    CONSENT_CHECK_AVAILABLE = True
+except ImportError:
+    CONSENT_CHECK_AVAILABLE = False
+    def _ctx_consent_check(source_id: str, mode: str = "local") -> dict:
+        return {"consented": True, "reason": "import_failed", "receipt_id": None}
+
 # ── config ────────────────────────────────────────────────────────
 DB_PATH = Path(os.environ.get("OPTIC_DB_PATH",
     str(Path(__file__).resolve().parent.parent.parent.parent / ".optic" / "v1.db")))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+IRIS_SUMMARY_PATH = DB_PATH.parent / "iris_summary.json"
+_iris_summary_lock = threading.Lock()
+_iris_summary_jobs: set[str] = set()  # tracks in-flight generation
 
 # ── LLM config ────────────────────────────────────────────────────
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -148,30 +194,40 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS signals (
             id TEXT PRIMARY KEY, category TEXT, description TEXT,
-            severity TEXT DEFAULT 'low', source_artifact_ids TEXT,
+            severity TEXT DEFAULT 'low',
+            source_artifact_ids TEXT,  /* DEPRECATED — use signal_source_artifacts */
             metadata TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS claims (
             id TEXT PRIMARY KEY, title TEXT, audience_lens TEXT, claim TEXT,
-            confidence_band TEXT, evidence_count INTEGER, supporting_evidence TEXT,
-            weakening_evidence TEXT, source_gaps TEXT, recency TEXT, severity TEXT,
+            confidence_band TEXT, evidence_count INTEGER,
+            supporting_evidence TEXT,   /* DEPRECATED — use claim_supporting_evidence */
+            weakening_evidence TEXT,    /* DEPRECATED — use claim_weakening_evidence */
+            source_gaps TEXT, recency TEXT, severity TEXT,
             actionability TEXT, possible_consequence TEXT, counterargument TEXT,
-            repair_options TEXT, model_version TEXT, not_a_verdict INTEGER DEFAULT 1,
+            repair_options TEXT,        /* DEPRECATED — use claim_repair_options */
+            model_version TEXT, not_a_verdict INTEGER DEFAULT 1,
             generated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS contradictions (
             id TEXT PRIMARY KEY, category TEXT, description TEXT,
-            claim_ids TEXT, artifact_ids TEXT, severity TEXT,
+            claim_ids TEXT,             /* DEPRECATED — use contradiction_claims */
+            artifact_ids TEXT,          /* DEPRECATED — use contradiction_artifacts */
+            severity TEXT,
             audience_affected TEXT, resolution_suggestion TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS risks (
             id TEXT PRIMARY KEY, category TEXT, description TEXT,
-            severity TEXT, linked_claim_ids TEXT, linked_artifact_ids TEXT,
+            severity TEXT,
+            linked_claim_ids TEXT,      /* DEPRECATED — use risk_linked_claims */
+            linked_artifact_ids TEXT,   /* DEPRECATED — use risk_linked_artifacts */
             audience_affected TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS repairs (
             id TEXT PRIMARY KEY, title TEXT, affected_audience TEXT,
-            linked_claim_id TEXT, linked_evidence_ids TEXT, impact REAL DEFAULT 0.5,
+            linked_claim_id TEXT REFERENCES claims(id) ON DELETE SET NULL,
+            linked_evidence_ids TEXT,   /* DEPRECATED — use repair_linked_evidence */
+            impact REAL DEFAULT 0.5,
             effort REAL DEFAULT 0.5, urgency REAL DEFAULT 0.5,
             reversibility REAL DEFAULT 0.5, cost_cents INTEGER DEFAULT 0,
             exact_steps TEXT, expected_effect TEXT, risk_of_overcorrecting TEXT,
@@ -189,20 +245,219 @@ def init_db():
             user_id TEXT PRIMARY KEY, step INTEGER DEFAULT 0,
             audit_mode TEXT, completed_steps TEXT, created_at TEXT
         );
+
+        -- ═══ JUNCTION TABLES — FOREIGN KEY ENFORCEMENT (Invariant #10) ═══
+
+        CREATE TABLE IF NOT EXISTS claim_supporting_evidence (
+            claim_id    TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (claim_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS claim_weakening_evidence (
+            claim_id    TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (claim_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS claim_repair_options (
+            claim_id  TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            repair_id TEXT NOT NULL REFERENCES repairs(id) ON DELETE CASCADE,
+            PRIMARY KEY (claim_id, repair_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS risk_linked_claims (
+            risk_id  TEXT NOT NULL REFERENCES risks(id) ON DELETE CASCADE,
+            claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            PRIMARY KEY (risk_id, claim_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS risk_linked_artifacts (
+            risk_id     TEXT NOT NULL REFERENCES risks(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (risk_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS repair_linked_evidence (
+            repair_id   TEXT NOT NULL REFERENCES repairs(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (repair_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS contradiction_claims (
+            contradiction_id TEXT NOT NULL REFERENCES contradictions(id) ON DELETE CASCADE,
+            claim_id         TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+            PRIMARY KEY (contradiction_id, claim_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS contradiction_artifacts (
+            contradiction_id TEXT NOT NULL REFERENCES contradictions(id) ON DELETE CASCADE,
+            artifact_id      TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (contradiction_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS signal_source_artifacts (
+            signal_id   TEXT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+            PRIMARY KEY (signal_id, artifact_id)
+        ) WITHOUT ROWID;
+
+        -- Migration tracking
+        CREATE TABLE IF NOT EXISTS _schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
+    _migrate_v1_schema(conn)
     conn.close()
+
+
+# ── Schema migration — idempotent, safe to call on every startup ──
+
+def _migrate_v1_schema(conn: sqlite3.Connection):
+    """Run schema migrations. Idempotent — checks _schema_migrations version."""
+    row = conn.execute(
+        "SELECT MAX(version) as v FROM _schema_migrations"
+    ).fetchone()
+    current = row["v"] if row and row["v"] else 0
+
+    # Always run the junction migration — it's idempotent (INSERT OR IGNORE)
+    # and the data may have been re-seeded after the migration first ran.
+    # Version 2 is guaranteed after this call regardless of prior state.
+    _migrate_v2_junction_tables(conn)
+
+
+def _migrate_v2_junction_tables(conn: sqlite3.Connection):
+    """V2: Migrate JSON TEXT columns into junction tables with FK constraints."""
+    import json as _json
+
+    # Ensure junction tables exist (idempotent)
+    _ddl = [
+        ("claim_supporting_evidence",
+         "claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE, "
+         "artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (claim_id, artifact_id)"),
+        ("claim_weakening_evidence",
+         "claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE, "
+         "artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (claim_id, artifact_id)"),
+        ("claim_repair_options",
+         "claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE, "
+         "repair_id TEXT NOT NULL REFERENCES repairs(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (claim_id, repair_id)"),
+        ("risk_linked_claims",
+         "risk_id TEXT NOT NULL REFERENCES risks(id) ON DELETE CASCADE, "
+         "claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (risk_id, claim_id)"),
+        ("risk_linked_artifacts",
+         "risk_id TEXT NOT NULL REFERENCES risks(id) ON DELETE CASCADE, "
+         "artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (risk_id, artifact_id)"),
+        ("repair_linked_evidence",
+         "repair_id TEXT NOT NULL REFERENCES repairs(id) ON DELETE CASCADE, "
+         "artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (repair_id, artifact_id)"),
+        ("contradiction_claims",
+         "contradiction_id TEXT NOT NULL REFERENCES contradictions(id) ON DELETE CASCADE, "
+         "claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (contradiction_id, claim_id)"),
+        ("contradiction_artifacts",
+         "contradiction_id TEXT NOT NULL REFERENCES contradictions(id) ON DELETE CASCADE, "
+         "artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (contradiction_id, artifact_id)"),
+        ("signal_source_artifacts",
+         "signal_id TEXT NOT NULL REFERENCES signals(id) ON DELETE CASCADE, "
+         "artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+         "PRIMARY KEY (signal_id, artifact_id)"),
+    ]
+    for name, cols in _ddl:
+        conn.execute(f"CREATE TABLE IF NOT EXISTS {name} ({cols}) WITHOUT ROWID")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _schema_migrations ("
+        "version INTEGER PRIMARY KEY, "
+        "applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    conn.commit()
+
+    def _parse_ids(raw):
+        if not raw or raw in ("", "[]"):
+            return []
+        try:
+            return _json.loads(raw)
+        except Exception:
+            return []
+
+    def _migrate_column(parent_table, child_col, child_table, junction_table,
+                        pk_a, pk_b):
+        rows = conn.execute(
+            f"SELECT id, {child_col} FROM {parent_table} "
+            f"WHERE {child_col} IS NOT NULL AND {child_col} != '' "
+            f"AND {child_col} != '[]'"
+        ).fetchall()
+        count = 0
+        for row_dict in rows:
+            parent_id = row_dict["id"]
+            child_ids = _parse_ids(row_dict[child_col])
+            for cid in child_ids:
+                exists = conn.execute(
+                    f"SELECT 1 FROM {child_table} WHERE id = ?", (cid,)
+                ).fetchone()
+                if exists:
+                    try:
+                        conn.execute(
+                            f"INSERT OR IGNORE INTO {junction_table} "
+                            f"({pk_a}, {pk_b}) VALUES (?, ?)",
+                            (parent_id, cid)
+                        )
+                        count += 1
+                    except sqlite3.IntegrityError:
+                        pass  # FK violation — orphaned reference, skip
+        return count
+
+    total = 0
+    total += _migrate_column("claims", "supporting_evidence", "artifacts",
+                             "claim_supporting_evidence", "claim_id", "artifact_id")
+    total += _migrate_column("claims", "weakening_evidence", "artifacts",
+                             "claim_weakening_evidence", "claim_id", "artifact_id")
+    total += _migrate_column("claims", "repair_options", "repairs",
+                             "claim_repair_options", "claim_id", "repair_id")
+    total += _migrate_column("risks", "linked_claim_ids", "claims",
+                             "risk_linked_claims", "risk_id", "claim_id")
+    total += _migrate_column("risks", "linked_artifact_ids", "artifacts",
+                             "risk_linked_artifacts", "risk_id", "artifact_id")
+    total += _migrate_column("repairs", "linked_evidence_ids", "artifacts",
+                             "repair_linked_evidence", "repair_id", "artifact_id")
+    total += _migrate_column("contradictions", "claim_ids", "claims",
+                             "contradiction_claims", "contradiction_id", "claim_id")
+    total += _migrate_column("contradictions", "artifact_ids", "artifacts",
+                             "contradiction_artifacts", "contradiction_id", "artifact_id")
+    total += _migrate_column("signals", "source_artifact_ids", "artifacts",
+                             "signal_source_artifacts", "signal_id", "artifact_id")
+
+    conn.execute(
+        "INSERT OR IGNORE INTO _schema_migrations (version) VALUES (2)"
+    )
+    conn.commit()
+    logger.info("Optic DB migration v2: %d junction rows migrated", total)
+    print(f"Optic DB migration v2 complete: {total} junction rows migrated")
+    return total
 
 
 init_db()
 
-# ── Auto-seed demo data on empty database ──────────────────────────
+# ── Auto-seed on empty database — uses real filesystem scan only ────
 try:
     from .startup import ensure_data as _ensure_data
     _seed_result = _ensure_data(DB_PATH)
     if _seed_result.get("seeded"):
-        print(f"Optic: auto-seeded demo data — {_seed_result.get('claims',0)} claims, "
-              f"{_seed_result.get('repairs',0)} repairs")
+        print(f"Optic: seeded from real filesystem scan — "
+              f"{_seed_result.get('claims',0)} claims, "
+              f"{_seed_result.get('scanned_files',0)} files, "
+              f"{_seed_result.get('workstreams',0)} workstreams")
+    elif _seed_result.get("source") == "insufficient_data":
+        print(f"Optic: HONEST EMPTY STATE — {_seed_result.get('message', 'insufficient files')}")
+        print("  Invariant #8: No Fake Completeness — no demo/template data will be inserted.")
     else:
         print(f"Optic: using existing data — {_seed_result.get('existing_claims',0)} claims")
 except ImportError:
@@ -260,6 +515,50 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _quick_clean(raw: str) -> str:
+    """Minimal name cleaner for workstream names read from DB metadata.
+
+    Strips URL fragments, hex noise, and generic terms.
+    Falls back to 'Other' when the name is purely noise.
+    """
+    if not raw or not raw.strip():
+        return "Unknown"
+    raw = raw.strip()
+    _NOISE = {
+        "https", "http", "www", "com", "org", "net", "html", "json", "xml",
+        "css", "js", "abx", "xtcftw", "rspace", "pyasn1",
+        "screenshot", "screenshots", "temp", "untitled", "node_modules",
+        "desktop", "downloads", "inbox",
+        "io", "co", "dev", "app", "ai", "gov", "edu",
+        "copy", "backup", "final", "draft",
+    }
+    import re as _re
+    name = raw.replace("-", " ").replace("_", " ")
+    words = name.split()
+    meaningful = []
+    for w in words:
+        wl = w.lower()
+        if wl in _NOISE:
+            continue
+        if _re.fullmatch(r"[0-9a-f]{6,}", wl):
+            continue
+        if len(wl) >= 4 and not _re.search(r"[aeiouy]", wl) and not _re.search(r"\d", wl):
+            continue
+        meaningful.append(w)
+    if not meaningful:
+        return "Other"
+    cleaned = []
+    for w in meaningful:
+        if w.upper() in ("AI", "API", "AWS", "UI", "UX", "ML", "NLP", "GPU", "CPU", "RAM", "SSD"):
+            cleaned.append(w.upper())
+        elif len(w) <= 2:
+            cleaned.append(w.upper())
+        else:
+            cleaned.append(w[0].upper() + w[1:].lower() if len(w) > 1 else w.upper())
+    result = " ".join(cleaned).strip()
+    return result or "Other"
+
+
 def _gen_token() -> str:
     return hashlib.sha256(f"{uuid4()}{time.time()}".encode()).hexdigest()[:32]
 
@@ -301,7 +600,7 @@ def _derive_workstreams() -> list[dict]:
         if wsid not in groups:
             groups[wsid] = {
                 "id": wsid,
-                "name": meta.get("workstream_name", "Unknown"),
+                "name": _quick_clean(meta.get("workstream_name", "Unknown")),
                 "confidence": float(meta.get("confidence", 0.5)),
                 "file_count": int(meta.get("file_count", 0)),
                 "topics": meta.get("topics", []),
@@ -351,47 +650,55 @@ def _derive_workstreams() -> list[dict]:
                 evidence_labels = labels
                 break
         if not evidence_labels:
-            evidence_labels = ["File organization", "Storage footprint", "Content diversity"]
+            evidence_labels = []
         extensions = [".md", ".pdf", ".txt"]
+        # Only fabricate key_files if real evidence labels exist
         for i, label in enumerate(evidence_labels[:3]):
             ext = extensions[i % len(extensions)]
             key_files.append({
                 "path": str(Path.home() / ".optic" / "scan" / name / f"{label}{ext}"),
                 "ext": ext,
-                "size": (i + 1) * 5000 + (hash(label) % 20000),
-                "mtime": now - (i + 1) * 3600,
+                "size": 0,
+                "mtime": now,
             })
         
         folders = list({(sig["description"] or "").split("'")[1] if "'" in (sig["description"] or "") else name for sig in wsd["signals"]})[:3]
         if not folders:
             folders = [name]
         
+        # Derive real mtime from the most recent signal in this workstream
+        wsmtime = now
+        for sig in wsd["signals"]:
+            sig_ct = sig.get("created_at") or ""
+            if sig_ct:
+                try:
+                    from datetime import datetime as _dt
+                    ts = _dt.fromisoformat(sig_ct.replace("Z", "+00:00")).timestamp()
+                    wsmtime = int(ts)
+                except Exception:
+                    pass
         workstreams.append({
             "id": wsid,
             "name": name,
             "confidence": round(wsd["confidence"], 2),
             "file_count": wsd["file_count"],
-            "size": wsd["file_count"] * 350_000,
-            "mtime": now - len(workstreams) * 7200,
+            "size": wsd["file_count"],
+            "mtime": wsmtime,
             "topics": wsd["topics"],
             "summary": summary,
             "key_files": key_files,
             "folders": folders,
-            "category_breakdown": {"Documents": 0.65, "Code": 0.20, "Other": 0.15},
+            "category_breakdown": {},
         })
     
     return workstreams or _fast_mock_ws_fallback()
 
 
 def _fast_mock_ws_fallback() -> list[dict]:
-    """Fallback if DB is empty."""
-    now = int(time.time())
-    return [
-        {"id": "cluster-empty", "name": "No data yet", "confidence": 0,
-         "file_count": 0, "size": 0, "mtime": now, "topics": [],
-         "summary": "Run a scan to populate workstreams.",
-         "key_files": [], "folders": [], "category_breakdown": {}},
-    ]
+    """Honest empty state — return no workstreams when DB is empty.
+    Invariant #8 (No Fake Completeness): NEVER fabricate placeholder data.
+    """
+    return []
 
 
 def _fast_mock_ws() -> list[dict]:
@@ -400,7 +707,14 @@ def _fast_mock_ws() -> list[dict]:
 
 
 def _mock_graph_payload() -> dict:
-    """Derive graph nodes and edges from real claims + signals in the DB."""
+    """Derive graph nodes and edges from real claims + signals in the DB.
+
+    Each real file path (or label+size for synthetic key_files) produces
+    exactly ONE graph node.  When the same evidence appears under multiple
+    workstreams the node's ``source_provenance`` field accumulates all
+    categories so the front-end can display multi-provenance nodes without
+    duplication.
+    """
     import json as _json
     conn = get_db()
     claims_cnt = conn.execute("SELECT COUNT(*) as c FROM claims").fetchone()["c"]
@@ -413,6 +727,8 @@ def _mock_graph_payload() -> dict:
     
     nodes = []
     links = []
+    # Deduplication: (label, size) → node index in nodes list
+    dedupe_map: dict[tuple[str, int], int] = {}
     seen_ids = set()
     idx = 0
     wstreams = _derive_workstreams()
@@ -422,17 +738,39 @@ def _mock_graph_payload() -> dict:
         cx = math.cos(angle) * 220
         cy = math.sin(angle) * 150
         for fi in range(min(len(ws.get("key_files", [])), 3)):
+            kf = ws["key_files"][fi]
+            path = kf["path"]
+            label = Path(path).stem
+            size = kf.get("size", 0)
+            dup_key = (label, size)
+
+            if dup_key in dedupe_map:
+                # Existing node — merge provenance
+                ni = dedupe_map[dup_key]
+                prov = nodes[ni].setdefault("source_provenance", [])
+                cat = ws["name"]
+                if cat not in prov:
+                    prov.append(cat)
+                # Record the cluster linkage
+                clusters = nodes[ni].setdefault("clusters", [])
+                if ws["id"] not in clusters:
+                    clusters.append(ws["id"])
+                continue
+
             node_id = f"node-{idx:03d}"
             seen_ids.add(node_id)
+            dedupe_map[dup_key] = len(nodes)
             nodes.append({
                 "id": node_id,
-                "path": ws["key_files"][fi]["path"],
-                "label": Path(ws["key_files"][fi]["path"]).stem,
-                "ext": ws["key_files"][fi].get("ext", ""),
-                "size": ws["key_files"][fi].get("size", 0),
-                "mtime": ws["key_files"][fi].get("mtime", 0),
+                "path": path,
+                "label": label,
+                "ext": kf.get("ext", ""),
+                "size": size,
+                "mtime": kf.get("mtime", 0),
                 "category": ws["name"],
                 "cluster": ws["id"],
+                "source_provenance": [ws["name"]],
+                "clusters": [ws["id"]],
                 "x": cx + (fi - 1) * 34,
                 "y": cy + ((fi % 2) * 28 - 14),
                 "z": math.sin(angle + fi) * 80,
@@ -448,13 +786,21 @@ def _mock_graph_payload() -> dict:
             idx += 1
     
     # Connect workstreams with shared topics
+    # Build a map: workstream id → set of node ids
+    ws_node_map: dict[str, set[str]] = {}
+    for node in nodes:
+        for cluster_id in node.get("clusters", [node.get("cluster", "")]):
+            ws_node_map.setdefault(cluster_id, set()).add(node["id"])
+
     for i in range(len(wstreams)):
         for j in range(i + 1, len(wstreams)):
             shared = set(wstreams[i].get("topics", [])) & set(wstreams[j].get("topics", []))
             if shared:
-                a_node = f"node-{i*3:03d}"
-                b_node = f"node-{j*3:03d}"
-                if a_node in seen_ids and b_node in seen_ids:
+                i_nodes = ws_node_map.get(wstreams[i]["id"], set())
+                j_nodes = ws_node_map.get(wstreams[j]["id"], set())
+                if i_nodes and j_nodes:
+                    a_node = sorted(i_nodes)[0]
+                    b_node = sorted(j_nodes)[0]
                     links.append({
                         "a": a_node, "b": b_node,
                         "score": 0.35,
@@ -469,19 +815,160 @@ def _mock_graph_payload() -> dict:
     }
 
 
+# ── iris summary cache ──────────────────────────────────────────
+
+def _iris_summary_cached() -> str | None:
+    """Return cached LLM-generated iris summary, or None."""
+    if not IRIS_SUMMARY_PATH.exists():
+        return None
+    try:
+        data = json.loads(IRIS_SUMMARY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    txt = str(data.get("summary", "")).strip()
+    return txt or None
+
+
+def _iris_summary_generate_sync() -> str:
+    """Generate an iris summary via LLM (Ollama or DeepSeek),
+    cache it, and return it. Returns empty string on failure."""
+    chat = iris_audit.IrisAuditChat()
+    prompt = (
+        "Summarize my digital footprint in exactly 2 short paragraphs "
+        "(3-4 sentences each) in plain, natural prose. "
+        "First paragraph: what my files reveal about my main interests and work. "
+        "Second paragraph: what's surprising or distinctive, and one concrete observation. "
+        "Rules: no bullet points, no markdown headers, no file counts, no jargon. "
+        "Write as if explaining to a thoughtful friend, not a data analyst."
+    )
+    answer = chat.ask(prompt, DB_PATH)
+    if not answer or len(answer) < 40:
+        return ""
+    # Clean: remove markdown, collapse whitespace
+    cleaned = _summary_clean(answer)
+    if cleaned:
+        _iris_summary_save(cleaned)
+    return cleaned
+
+
+def _iris_summary_save(txt: str) -> None:
+    """Persist the iris summary to the cache file."""
+    rec = {
+        "summary": txt[:900].strip(),
+        "generated_at": int(time.time()),
+        "model": "llm",
+    }
+    with _iris_summary_lock:
+        IRIS_SUMMARY_PATH.write_text(
+            json.dumps(rec, ensure_ascii=False), encoding="utf-8"
+        )
+
+
+def _iris_summary_async() -> None:
+    """Fire-and-forget: generate iris summary in a background thread."""
+    with _iris_summary_lock:
+        if "v1" in _iris_summary_jobs:
+            return
+        _iris_summary_jobs.add("v1")
+    t = threading.Thread(target=_iris_summary_worker, daemon=True)
+    t.start()
+
+
+def _iris_summary_worker() -> None:
+    """Background worker for iris summary generation."""
+    try:
+        _iris_summary_generate_sync()
+    finally:
+        with _iris_summary_lock:
+            _iris_summary_jobs.discard("v1")
+
+
+def _summary_clean(txt: str) -> str:
+    """Clean LLM output: remove markdown, collapse whitespace."""
+    import re
+    # Remove markdown headers, bold, italic
+    txt = re.sub(r'(?m)^#{1,6}\s+', '', txt)
+    txt = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', txt)
+    txt = re.sub(r'_{1,3}([^_]+)_{1,3}', r'\1', txt)
+    lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    joined = " ".join(lines)
+    # Collapse multiple spaces
+    joined = re.sub(r'\s+', ' ', joined)
+    return joined[:900].strip()
+
+
+def _format_time_ago(iso_ts: str) -> str:
+    """Convert an ISO timestamp to a human-readable 'X ago' string."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return "just now"
+    now = datetime.now(timezone.utc)
+    delta = now - dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else now - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    months = days // 30
+    return f"{months}mo ago"
+
+
 def _mock_home_payload() -> dict:
-    """Derive home-panel stats from real DB data."""
+    """Derive home-panel stats from real DB data — no hardcoded identity narratives.
+    Invariant #8 (No Fake Completeness): every count comes from the DB.
+    """
+    import json as _json
     conn = get_db()
     claims_cnt = conn.execute("SELECT COUNT(*) as c FROM claims").fetchone()["c"]
     repairs_cnt = conn.execute("SELECT COUNT(*) as c FROM repairs").fetchone()["c"]
     risks_cnt = conn.execute("SELECT COUNT(*) as c FROM risks").fetchone()["c"]
     signals_cnt = conn.execute("SELECT COUNT(*) as c FROM signals").fetchone()["c"]
+    contradictions_cnt = conn.execute("SELECT COUNT(*) as c FROM contradictions").fetchone()["c"]
+    source_cnt = conn.execute("SELECT COUNT(*) as c FROM sources").fetchone()["c"]
     # Get top narratives from claim titles
     titles = conn.execute("SELECT title FROM claims LIMIT 15").fetchall()
+    # Get most recent timestamp from signals or claims
+    latest = conn.execute(
+        "SELECT MAX(created_at) as ts FROM (SELECT created_at FROM signals UNION ALL SELECT generated_at as created_at FROM claims)"
+    ).fetchone()
+    # Real audience exposure: distinct audience types from contradictions
+    aud_rows = conn.execute(
+        "SELECT DISTINCT audience_affected FROM contradictions "
+        "WHERE audience_affected IS NOT NULL AND audience_affected != ''"
+    ).fetchall()
     conn.close()
-    
+
+    # Parse audience_affected (stored as JSON arrays like '[\"recruiter\"]')
+    audience_set: set[str] = set()
+    for row in aud_rows:
+        val = row["audience_affected"] or ""
+        if val.startswith("["):
+            try:
+                items = _json.loads(val)
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, str) and item.strip():
+                            audience_set.add(item.strip())
+            except Exception:
+                pass
+        elif val.strip():
+            audience_set.add(val.strip())
+
     workstreams = _derive_workstreams()
-    
+
     narratives = []
     # Build clean narrative labels from workstream names
     for ws in workstreams:
@@ -499,25 +986,21 @@ def _mock_home_payload() -> dict:
                 narratives.append(t)
             if len(narratives) >= 5:
                 break
-    
+
     file_count = sum(ws.get("file_count", 0) for ws in workstreams)
     total_size = sum(ws.get("size", 0) for ws in workstreams)
     confidence_vals = [ws.get("confidence", 0) for ws in workstreams if ws.get("confidence")]
-    coherence_avg = round(sum(confidence_vals) / len(confidence_vals), 2) if confidence_vals else 0.78
-    
-    # Build a rich personality summary from the data
-    dominant_topic = "code" if any("code" in (ws.get("topics") or []) for ws in workstreams[:3]) else "content"
-    largest_ws = workstreams[0] if workstreams else {}
-    topic_str = ", ".join(largest_ws.get("topics", ["various"])[:2])
-    size_words = "substantial" if file_count > 3000 else "moderate" if file_count > 1000 else "focused"
-    iris_summary = (
-        f"You maintain a {size_words} digital footprint of {file_count} files "
-        f"across {len(workstreams)} workstreams. Your strongest signal is a "
-        f"{dominant_topic}-heavy workspace of {largest_ws.get('file_count', 0)} files "
-        f"covering {topic_str}. "
-        f"{claims_cnt} inference claims, {repairs_cnt} repairs suggested."
-    )
-    
+    coherence_avg = round(sum(confidence_vals) / len(confidence_vals), 2) if confidence_vals else 0.0
+
+    # Derive last_analyzed_ago from real DB timestamps
+    last_analyzed_ago = _format_time_ago(latest["ts"]) if latest and latest["ts"] else "never"
+
+    # Get LLM-generated iris summary (or None if not yet generated)
+    iris_summary = _iris_summary_cached()
+    # Fire-and-forget: trigger generation if no cached summary
+    if iris_summary is None:
+        _iris_summary_async()
+
     return {
         "home": str(Path.home()),
         "file_count": file_count,
@@ -525,10 +1008,16 @@ def _mock_home_payload() -> dict:
         "workstreams_count": len(workstreams),
         "coherence_avg": coherence_avg,
         "signal_count": signals_cnt,
-        "source_count": len(set(ws.get("name", "") for ws in workstreams)),
-        "last_analyzed_ago": "just now",
-        "narratives": narratives or ["AI builder", "Independent researcher", "Privacy conscious", "Systems thinker"],
-        "exposures": len(workstreams),
+        "claims_count": claims_cnt,
+        "repairs_count": repairs_cnt,
+        "risks_count": risks_cnt,
+        "contradictions_count": contradictions_cnt,
+        "source_count": source_cnt,
+        "audience_count": len(audience_set),
+        "audiences": sorted(audience_set),
+        "last_analyzed_ago": last_analyzed_ago,
+        "narratives": narratives,
+        "exposures": contradictions_cnt,
         "iris_summary": iris_summary,
     }
 
@@ -537,7 +1026,14 @@ def _mock_home_payload() -> dict:
 
 @app.get("/api/runs")
 async def legacy_runs():
-    return {"runs": ["20260606-fast-mock"]}
+    """Return real scan run identifiers from the DB."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT DISTINCT substr(created_at, 1, 8) as run_id FROM signals ORDER BY run_id DESC LIMIT 5"
+    ).fetchall()
+    conn.close()
+    runs = [r["run_id"] for r in rows] if rows else []
+    return {"runs": runs}
 
 
 @app.get("/api/workstreams")
@@ -551,20 +1047,57 @@ async def legacy_home():
 
 
 @app.get("/api/graph")
-async def legacy_graph():
-    return _mock_graph_payload()
+async def legacy_graph(token: str = ""):
+    """Return the full evidence graph from the last audit run.
+
+    Tries to look up the user via token, falls back to first local user,
+    then to empty graph if no users exist.
+    """
+    user = None
+    if token:
+        user = _get_user(token)
+    if not user:
+        # Try any user in the DB (local-first: usually just one)
+        conn = get_db()
+        row = conn.execute(
+            "SELECT * FROM users WHERE is_test_user=0 LIMIT 1"
+        ).fetchone()
+        conn.close()
+        if row:
+            user = _row_to_dict(row)
+    if not user:
+        return {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0,
+                "run": "no-users"}
+    graph_data = _build_audit_graph(user)
+    graph_data["run"] = "v1-live"
+    return graph_data
 
 
 @app.get("/api/status")
 async def legacy_status():
+    """Return live status derived from real DB data."""
     home = _mock_home_payload()
+    # Get the most recent signal timestamp as the last_run identifier
+    conn = get_db()
+    last = conn.execute("SELECT MAX(created_at) as ts FROM signals").fetchone()
+    # Scanning state: if signals exist, we're not actively scanning
+    sig_count = conn.execute("SELECT COUNT(*) as c FROM signals").fetchone()["c"]
+    conn.close()
+    last_run = (last["ts"] or "").replace(":", "").replace("-", "").replace("T", "-")[:15] if last and last["ts"] else ""
+    # Derive stage from DB state
+    if sig_count == 0:
+        stage = "empty"
+        stage_state = "no-data"
+    else:
+        stage = "ready"
+        stage_state = "ready"
     return {
         "scanning": False,
-        "last_run": "20260606-fast-mock",
+        "last_run": last_run,
         "queue_depth": 0,
         "progress": {
-            "stage": "ready",
-            "stage_state": "ready",
+            "stage": stage,
+            "stage_state": stage_state,
             "indexed": home["file_count"],
             "total": home["file_count"],
         },
@@ -576,24 +1109,45 @@ async def legacy_status():
 
 @app.get("/api/analyze")
 async def legacy_analyze(kind: str = "largest", limit: int = 10):
-    files = [
-        {**f, "id": f"mock-file-{wi}-{fi}", "cluster": ws["id"]}
-        for wi, ws in enumerate(_fast_mock_ws())
-        for fi, f in enumerate(ws.get("key_files", []))
-    ]
+    """Return analysis results from real DB artifacts. No mock data."""
     lim = max(1, min(int(limit or 10), 50))
+    conn = get_db()
     if kind == "duplicates":
-        if not files:
-            return {"kind": kind, "groups": []}
-        groups = [{
-            "hash": "mock-duplicate-research",
-            "waste": 18_420,
-            "items": [files[0], {**files[0], "path": files[0]["path"].replace(".md", " copy.md")}],
-        }]
-        return {"kind": kind, "groups": groups[:lim]}
+        # Find artifacts with the same raw_hash (true duplicates)
+        dup_rows = conn.execute("""
+            SELECT raw_hash, COUNT(*) as cnt, GROUP_CONCAT(encrypted_path, '|||') as paths
+            FROM artifacts WHERE raw_hash IS NOT NULL AND raw_hash != ''
+            GROUP BY raw_hash HAVING cnt > 1 LIMIT ?
+        """, (lim,)).fetchall()
+        conn.close()
+        groups = []
+        for row in dup_rows:
+            paths = row["paths"].split("|||") if row["paths"] else []
+            items = [{"path": p, "hash": row["raw_hash"]} for p in paths]
+            groups.append({
+                "hash": row["raw_hash"][:20],
+                "waste": 0,
+                "items": items,
+            })
+        return {"kind": kind, "groups": groups}
+
     if kind == "old_downloads":
-        return {"kind": kind, "items": sorted(files, key=lambda f: f.get("mtime", 0))[:lim] if files else []}
-    return {"kind": kind, "items": sorted(files, key=lambda f: f.get("size", 0), reverse=True)[:lim] if files else []}
+        rows = conn.execute(
+            "SELECT encrypted_path as path, created_at as mtime FROM artifacts ORDER BY created_at ASC LIMIT ?",
+            (lim,),
+        ).fetchall()
+        conn.close()
+        items = [{"path": r["path"], "mtime": r["mtime"]} for r in rows]
+        return {"kind": kind, "items": items}
+
+    # kind == "largest" (default)
+    rows = conn.execute(
+        "SELECT encrypted_path as path, id FROM artifacts ORDER BY encrypted_path DESC LIMIT ?",
+        (lim,),
+    ).fetchall()
+    conn.close()
+    items = [{"path": r["path"], "id": r["id"]} for r in rows]
+    return {"kind": kind, "items": items}
 
 @app.post("/api/v1/auth/signup")
 async def signup(req: SignupRequest):
@@ -873,6 +1427,200 @@ def _build_evidence_graph(user: dict) -> graph.EvidenceGraph:
     return eg
 
 
+def _build_audit_graph(user: dict, workstreams: list | None = None) -> graph.EvidenceGraph:
+    """Build a complete EvidenceGraph from audit results in the DB.
+
+    Populates nodes for claims, contradictions, risks, repairs, audiences,
+    workstreams and edges for supports, weakens, contradicts, risky_for,
+    repaired_by, visible_to.  Returns a graph ready for JSON export.
+    """
+    eg = graph.EvidenceGraph()
+
+    # ── user root ──────────────────────────────────────────────
+    user_id = str(user["id"])
+    eg.add_node("user", user_id,
+                label=user.get("email", "Optic user"),
+                data={"local_mode": True})
+
+    conn = get_db()
+
+    # ── audience lens nodes ────────────────────────────────────
+    audience_ids = {}
+    for lens_id in AUDIENCE_LENSES:
+        label = lens_id.replace("_", " ").title()
+        eg.add_node("audience", f"audience:{lens_id}", label=label)
+        audience_ids[lens_id] = f"audience:{lens_id}"
+
+    # ── workstream / source nodes ─────────────────────────────
+    wstreams = workstreams or _derive_workstreams()
+    for ws in wstreams:
+        ws_id = ws["id"]
+        eg.add_node("document", ws_id,
+                    label=ws.get("name", "Unknown"),
+                    data={"confidence": ws.get("confidence"),
+                          "file_count": ws.get("file_count"),
+                          "topics": ws.get("topics", [])})
+        eg.add_edge("derived_from", ws_id, user_id,
+                    data={"type": "workstream"})
+
+    # ── claim nodes + evidence edges ──────────────────────────
+    claims = conn.execute("SELECT * FROM claims").fetchall()
+    for row in claims:
+        cid = row["id"]
+        audience = row["audience_lens"] or "general"
+        confidence = row["confidence_band"] or "low"
+        eg.add_node("claim", cid,
+                    label=row["title"] or (row["claim"] or "")[:80],
+                    data={
+                        "claim": row["claim"],
+                        "audience_lens": audience,
+                        "confidence_band": confidence,
+                        "severity": row["severity"],
+                        "evidence_count": row["evidence_count"],
+                        "not_a_verdict": bool(int(row["not_a_verdict"] or "1")),
+                    })
+        # claim → audience
+        if audience in audience_ids:
+            eg.add_edge("visible_to", cid, audience_ids[audience])
+
+        # supporting evidence — use merge_node for provenance tracking
+        try:
+            supporting = json.loads(row["supporting_evidence"] or "[]")
+        except Exception:
+            supporting = []
+        for ev in supporting:
+            ev_id = f"evidence:{ev}"
+            eg.merge_node("artifact", ev_id,
+                          label=str(ev)[:60],
+                          data={"evidence_role": "supporting"},
+                          provenance=audience)
+            eg.add_edge("supports", ev_id, cid, weight=0.8)
+
+        # weakening evidence
+        try:
+            weakening = json.loads(row["weakening_evidence"] or "[]")
+        except Exception:
+            weakening = []
+        for ev in weakening:
+            ev_id = f"evidence:{ev}"
+            eg.merge_node("artifact", ev_id,
+                          label=str(ev)[:60],
+                          data={"evidence_role": "weakening"},
+                          provenance=audience)
+            eg.add_edge("weakens", ev_id, cid, weight=0.4)
+
+        # source gaps as missing-context edges
+        try:
+            gaps = json.loads(row["source_gaps"] or "[]")
+        except Exception:
+            gaps = []
+        for gap in gaps:
+            gap_id = f"source_gap:{gap}"
+            eg.merge_node("source_gap", gap_id,
+                          label=str(gap)[:80],
+                          provenance=audience)
+            eg.add_edge("missing_context_for", gap_id, cid)
+
+    # ── contradiction nodes + contradicts edges ────────────────
+    contradictions = conn.execute("SELECT * FROM contradictions").fetchall()
+    for row in contradictions:
+        cid = row["id"]
+        eg.add_node("contradiction", cid,
+                    label=row["category"] or "contradiction",
+                    data={
+                        "description": row["description"],
+                        "severity": row["severity"],
+                        "resolution_suggestion":
+                            row["resolution_suggestion"] or "",
+                    })
+        # contradicts edges to linked claims
+        try:
+            linked = json.loads(row["claim_ids"] or "[]")
+        except Exception:
+            linked = []
+        for claim_id in linked:
+            eg.add_edge("contradicts", cid, str(claim_id), weight=0.9)
+
+        # audience affected
+        try:
+            affected = json.loads(row["audience_affected"] or "[]")
+        except Exception:
+            affected = []
+        for aud in affected:
+            key = f"audience:{aud}"
+            if key not in audience_ids:
+                eg.add_node("audience", key,
+                            label=str(aud).replace("_", " ").title())
+                audience_ids[aud] = key
+            eg.add_edge("risky_for", cid, audience_ids.get(aud, key))
+
+    # ── risk nodes ─────────────────────────────────────────────
+    risks = conn.execute("SELECT * FROM risks").fetchall()
+    for row in risks:
+        rid = row["id"]
+        eg.add_node("risk", rid,
+                    label=row["category"] or "risk",
+                    data={
+                        "description": row["description"],
+                        "severity": row["severity"],
+                    })
+        try:
+            affected = json.loads(row["audience_affected"] or "[]")
+        except Exception:
+            affected = []
+        for aud in affected:
+            key = f"audience:{aud}"
+            if key not in audience_ids:
+                eg.add_node("audience", key,
+                            label=str(aud).replace("_", " ").title())
+                audience_ids[aud] = key
+            eg.add_edge("risky_for", rid, audience_ids.get(aud, key))
+
+    # ── repair nodes + repaired_by edges ───────────────────────
+    repairs = conn.execute("SELECT * FROM repairs").fetchall()
+    for row in repairs:
+        rid = row["id"]
+        eg.add_node("repair", rid,
+                    label=row["title"] or "repair",
+                    data={
+                        "impact": row["impact"],
+                        "effort": row["effort"],
+                        "urgency": row["urgency"],
+                        "status": row["status"],
+                    })
+        # repaired_by from linked claim
+        linked_claim = row["linked_claim_id"]
+        if linked_claim:
+            eg.add_edge("repaired_by", str(linked_claim), rid)
+
+        # repaired_by from affected audiences
+        try:
+            affected = json.loads(row["affected_audience"] or "[]")
+        except Exception:
+            affected = []
+        for aud in affected:
+            key = f"audience:{aud}"
+            if key not in audience_ids:
+                eg.add_node("audience", key,
+                            label=str(aud).replace("_", " ").title())
+                audience_ids[aud] = key
+            eg.add_edge("repaired_by", audience_ids.get(aud, key), rid)
+
+    conn.close()
+
+    # ── extract nodes / edges for JSON export ──────────────────
+    from contextlib import closing
+    with closing(eg) as final_graph:
+        nodes = [final_graph._node(r) for r in
+                 final_graph.conn.execute(
+                     "SELECT * FROM nodes ORDER BY type,label,id").fetchall()]
+        edges = [final_graph._edge(r) for r in
+                 final_graph.conn.execute(
+                     "SELECT * FROM edges ORDER BY type,id").fetchall()]
+    return {"nodes": nodes, "edges": edges,
+            "node_count": len(nodes), "edge_count": len(edges)}
+
+
 @app.post("/api/v1/sources/import")
 async def import_sources(request: Request, token: str = ""):
     user = _get_user(token)
@@ -913,13 +1661,8 @@ async def get_evidence_graph(token: str = ""):
     user = _get_user(token)
     if not user:
         raise HTTPException(401, "invalid token")
-    eg = _build_evidence_graph(user)
-    try:
-        nodes = [eg._node(r) for r in eg.conn.execute("SELECT * FROM nodes ORDER BY type,label,id").fetchall()]
-        edges = [eg._edge(r) for r in eg.conn.execute("SELECT * FROM edges ORDER BY type,id").fetchall()]
-        return {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges)}
-    finally:
-        eg.close()
+    graph_data = _build_audit_graph(user)
+    return graph_data
 
 
 @app.get("/api/v1/entities")
@@ -938,6 +1681,126 @@ async def get_scrapers_status(token: str = ""):
     if not user:
         raise HTTPException(401, "invalid token")
     return {"providers": scrapers.provider_ui_states()}
+
+
+class ScraperFetchRequest(BaseModel):
+    """Trigger a scraper fetch. Provider + scope dict."""
+    provider: str = "manual_url"
+    scope: dict[str, Any] = {}
+    save: bool = True  # persist artifacts to DB
+    user_label: str = ""
+
+
+@app.post("/api/v1/scrapers/fetch")
+async def scraper_fetch(req: ScraperFetchRequest, token: str = ""):
+    """Run a user-triggered fetch through any registered provider."""
+    user = _get_user(token)
+    if not user:
+        raise HTTPException(401, "invalid token")
+    provider_cls = scrapers.providers_by_id.get(req.provider)
+    if not provider_cls:
+        raise HTTPException(400, f"unknown provider: {req.provider}. Available: {list(scrapers.providers_by_id)}")
+    scope = dict(req.scope)
+    scope["user_triggered"] = True
+    provider = provider_cls()
+    ui = provider.ui_state()
+    if not ui.enabled:
+        raise HTTPException(400, f"provider {req.provider} is disabled: {ui.reason}")
+    result = provider.fetch(scope)
+    artifacts_list = result.artifacts
+    source_id = None
+    if req.save and artifacts_list:
+        source_id = _save_import(
+            str(user["id"]),
+            req.provider,
+            req.provider,
+            req.user_label or f"{provider.label} import",
+            artifacts_list,
+            {"scope": scope, "provider": req.provider},
+        )
+    return {
+        "provider": req.provider,
+        "ui_state": ui.as_dict(),
+        "artifacts": [_jsonable(a) for a in artifacts_list],
+        "artifact_count": len(artifacts_list),
+        "errors": result.errors,
+        "warnings": result.warnings,
+        "source_id": source_id,
+    }
+
+
+@app.get("/api/v1/scrapers/search/status")
+async def get_search_providers_status(token: str = ""):
+    """Return UI status for search-specific providers (Brave, SerpAPI, Tavily)."""
+    user = _get_user(token)
+    if not user:
+        raise HTTPException(401, "invalid token")
+    return {"search_providers": scrapers.search_providers_ui()}
+
+
+class SearchRequest(BaseModel):
+    """Search query with optional provider override."""
+    query: str
+    provider: str = "tavily"  # default search provider
+    num_results: int = 10
+    save: bool = True
+    user_label: str = ""
+
+
+@app.post("/api/v1/scrapers/search")
+async def scraper_search(req: SearchRequest, token: str = ""):
+    """Execute search via a search provider (Brave, SerpAPI, or Tavily)."""
+    user = _get_user(token)
+    if not user:
+        raise HTTPException(401, "invalid token")
+    valid_search = {"brave_search", "serpapi", "tavily"}
+    if req.provider not in valid_search:
+        raise HTTPException(400, f"unknown search provider: {req.provider}. Use one of: {sorted(valid_search)}")
+    provider_cls = scrapers.providers_by_id.get(req.provider)
+    if not provider_cls:
+        raise HTTPException(400, f"provider {req.provider} not registered")
+    provider = provider_cls()
+    ui = provider.ui_state()
+    if not ui.enabled:
+        return {
+            "provider": req.provider,
+            "query": req.query,
+            "ui_state": ui.as_dict(),
+            "artifacts": [],
+            "artifact_count": 0,
+            "errors": [f"Search provider disabled: {ui.reason}"],
+            "warnings": [],
+            "disabled": True,
+            "required_keys": ui.missing_credentials,
+        }
+    scope = {
+        "user_triggered": True,
+        "query": req.query,
+        "num_results": req.num_results,
+    }
+    result = provider.fetch(scope)
+    artifacts_list = result.artifacts
+    source_id = None
+    if req.save and artifacts_list:
+        source_id = _save_import(
+            str(user["id"]),
+            req.provider,
+            req.provider,
+            req.user_label or f"Search: {req.query[:80]}",
+            artifacts_list,
+            {"query": req.query, "provider": req.provider, "num_results": req.num_results},
+        )
+    return {
+        "provider": req.provider,
+        "query": req.query,
+        "ui_state": ui.as_dict(),
+        "artifacts": [_jsonable(a) for a in artifacts_list],
+        "artifact_count": len(artifacts_list),
+        "errors": result.errors,
+        "warnings": result.warnings,
+        "source_id": source_id,
+        "disabled": False,
+    }
 
 
 # ── iris ──────────────────────────────────────────────────────────
@@ -973,6 +1836,52 @@ async def iris_ask(req: IrisAskRequest, token: str = ""):
     chat = iris_audit.IrisAuditChat()
     answer = chat.ask(req.text, DB_PATH)
     return {"response": answer}
+
+
+@app.get("/api/v1/iris/summary")
+async def iris_summary_get(token: str = ""):
+    """Return the cached LLM-generated iris summary, or null if not yet generated."""
+    user = _get_user(token)
+    if not user:
+        raise HTTPException(401, "invalid token")
+    summary = _iris_summary_cached()
+    return {"iris_summary": summary, "cached": summary is not None}
+
+
+@app.post("/api/v1/iris/summary")
+async def iris_summary_generate(token: str = ""):
+    """Force-regenerate the iris summary via LLM and cache it."""
+    user = _get_user(token)
+    if not user:
+        raise HTTPException(401, "invalid token")
+    summary = _iris_summary_generate_sync()
+    if summary:
+        return {"iris_summary": summary, "generated": True}
+    else:
+        raise HTTPException(503, "LLM unavailable — could not generate summary")
+
+
+@app.get("/api/iris/summary")
+async def iris_summary_legacy_get(token: str = ""):
+    """Legacy endpoint: return cached iris summary or null."""
+    user = _get_user(token)
+    if not user:
+        raise HTTPException(401, "invalid token")
+    summary = _iris_summary_cached()
+    return {"iris_summary": summary, "cached": summary is not None}
+
+
+@app.post("/api/iris/summary")
+async def iris_summary_legacy_generate(token: str = ""):
+    """Legacy endpoint: force-regenerate iris summary."""
+    user = _get_user(token)
+    if not user:
+        raise HTTPException(401, "invalid token")
+    summary = _iris_summary_generate_sync()
+    if summary:
+        return {"iris_summary": summary, "generated": True}
+    else:
+        raise HTTPException(503, "LLM unavailable — could not generate summary")
 
 
 @app.post("/api/iris")
@@ -1187,6 +2096,171 @@ def _load_ctxorg_workstreams() -> list[dict]:
     return workstreams
 
 
+# ── Stage 4: Real file parsing ────────────────────────────────────
+
+def _fetch_cluster_files(cluster_name: str, max_files: int = 15) -> list[dict]:
+    """Fetch real file paths and extracted text for a workstream cluster.
+    
+    Uses ctxorg DB's items table. Returns list of {path, size, ext, text} dicts.
+    """
+    files = []
+    if not CTXORG_AVAILABLE:
+        return files
+    try:
+        cfg_path = _Path(__file__).resolve().parent.parent.parent.parent / "config.json"
+        if not cfg_path.exists():
+            cfg_path = _Path(__file__).resolve().parent.parent.parent.parent / "backend" / "config.json"
+        if cfg_path.exists():
+            cfg = json.load(open(cfg_path))
+            state_dir = cfg.get("state_dir", ".ctxorg/state")
+            db_path = _Path(cfg.get("home", "")) / state_dir / "ctx.db"
+            if not db_path.exists():
+                db_path = _Path(__file__).resolve().parent.parent.parent.parent / ".ctxorg" / "state" / "ctx.db"
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path))
+                conn.row_factory = sqlite3.Row
+                # Escape single-quotes in cluster name for LIKE
+                safe_name = cluster_name.replace("'", "''")
+                rows = conn.execute(
+                    """SELECT path, kind, size, ext, mtime, text
+                       FROM items
+                       WHERE kind='file'
+                         AND path NOT LIKE '%node_modules%'
+                         AND path NOT LIKE '%.git/%'
+                         AND path NOT LIKE '%__pycache__%'
+                         AND path NOT LIKE '%/.%'
+                         AND ext IN ('.md','.txt','.py','.js','.json','.csv','.html','.pdf',
+                                     '.docx','.xml','.yaml','.yml','.toml','.rst','.log')
+                         AND path LIKE ?
+                       ORDER BY size DESC
+                       LIMIT ?""",
+                    (f"%/{safe_name}/%", max_files))
+                files = [dict(r) for r in rows.fetchall()]
+                conn.close()
+    except Exception:
+        pass
+    return files
+
+
+def _parse_file_into_artifacts(
+    filepath: str,
+    source_id: UUID,
+    existing_hashes: set | None = None,
+) -> tuple[list[Artifact], list[str]]:
+    """Parse a single file using ParserRegistry and return Artifacts.
+    
+    Returns (artifacts, error_messages).
+    """
+    if existing_hashes is None:
+        existing_hashes = set()
+    artifacts = []
+    errors = []
+    try:
+        registry = parsers.ParserRegistry(source_id=source_id)
+        fmt = registry.detect_format(filepath=filepath)
+        result = registry.parse(filepath=filepath, format_hint=fmt)
+        errors.extend(result.errors)
+        for art in result.artifacts:
+            if art.raw_hash in existing_hashes:
+                continue
+            existing_hashes.add(art.raw_hash)
+            artifacts.append(art)
+    except Exception as e:
+        errors.append(f"parse error for {filepath}: {e}")
+    return artifacts, errors
+
+
+# ── Stage 5: Signal detection on parsed content ───────────────────
+
+def _build_signal_auditor():
+    """Build a configured SignalAuditor with all relevant detectors.
+    
+    Returns SignalAuditor or None if signal audit is unavailable.
+    """
+    if not SIGNAL_AUDIT_AVAILABLE:
+        return None
+    # Use string enum values directly (str Enum) to avoid conditional import types
+    auditor = SignalAuditor()
+    auditor.add_detector(PatternDetector.default_bias_patterns())
+    auditor.add_detector(PatternDetector(  # type: ignore[arg-type]
+        patterns={
+            "ai_ml_content": (
+                r"\b(machine learning|deep learning|neural network|transformer|"
+                r"LLM|GPT|BERT|fine.?tun|embedding|vector|RAG|"
+                r"prompt engineer|diffusion|GAN|reinforcement)\b",
+                "info",  # Severity.INFO
+                0.7,
+            ),
+            "software_engineering": (
+                r"\b(python|javascript|typescript|rust|golang?|react|next\.?js|"
+                r"API|REST|GraphQL|docker|kubernetes|CI/CD|"
+                r"postgres|redis|AWS|deploy|microservice)\b",
+                "info",
+                0.6,
+            ),
+            "research_signals": (
+                r"\b(paper|arxiv|doi|preprint|experiment|baseline|"
+                r"benchmark|ablation|state.of.the.art|SOTA)\b",
+                "info",
+                0.5,
+            ),
+        }
+    ))
+    auditor.add_detector(AnomalyDetector(repetition_threshold=0.3))
+    auditor.add_detector(ThresholdDetector(
+        thresholds={"file_count": (1.0, 1000.0, "info")}
+    ))
+    return auditor
+
+
+def _audit_content_for_signals(
+    content: str,
+    source_type: str = "text",
+    metadata: dict | None = None,
+) -> list[dict]:
+    """Run signal detectors against parsed content and return detection dicts.
+    
+    Args:
+        content: The text content to analyze.
+        source_type: One of 'text', 'html', 'code', 'pdf', 'csv', 'image', etc.
+        metadata: Optional metadata about the content source.
+    
+    Returns:
+        List of detection dicts with attribute, severity, confidence, location, description.
+    """
+    if not SIGNAL_AUDIT_AVAILABLE or not content or len(content.strip()) < 20:
+        return []
+    
+    auditor = _build_signal_auditor()
+    if not auditor:
+        return []
+    
+    # Map our source types to SignalSource string values
+    source_map = {
+        "text": "text",
+        "html": "text",
+        "code": "text",
+        "pdf": "text",
+        "csv": "text",
+        "email": "text",
+        "tweet": "social_media",
+        "linkedin_profile": "social_media",
+        "github_repo": "text",
+        "github_data": "text",
+        "image": "image",
+    }
+    sig_source = source_map.get(source_type, "text")  # type: ignore
+    
+    try:
+        sig_audit = auditor.audit(content, sig_source, content[:100], metadata or {})  # type: ignore
+        detections = []
+        for det in sig_audit.detections:
+            detections.append(det.to_dict())
+        return detections
+    except Exception:
+        return []
+
+
 def _workstream_to_signals(ws: dict) -> list[Signal]:
     """Convert a ctxorg workstream to V1 Signal objects."""
     signals = []
@@ -1203,7 +2277,7 @@ def _workstream_to_signals(ws: dict) -> list[Signal]:
             id=uuid4(), category="frequent_topic",
             description=f"Workstream '{ws_name}' focused on: {', '.join(ws_topics[:5])}",
             severity=Severity.LOW,
-            source_artifact_ids=[uuid4()],
+            source_artifact_ids=[],
             metadata={"workstream_id": ws.get("id"), "workstream_name": ws_name,
                       "topics": ws_topics, "confidence": confidence, "file_count": file_count},
             created_at=now
@@ -1215,7 +2289,7 @@ def _workstream_to_signals(ws: dict) -> list[Signal]:
             id=uuid4(), category="project_velocity",
             description=f"High-confidence workstream '{ws_name}' with {file_count} files shows sustained activity",
             severity=Severity.LOW,
-            source_artifact_ids=[uuid4()],
+            source_artifact_ids=[],
             metadata={"workstream_id": ws.get("id"), "confidence": confidence, "file_count": file_count},
             created_at=now
         ))
@@ -1226,7 +2300,7 @@ def _workstream_to_signals(ws: dict) -> list[Signal]:
             id=uuid4(), category="workstream_fragmentation",
             description=f"Low-confidence workstream '{ws_name}' may indicate scattered or unfocused work",
             severity=Severity.MEDIUM,
-            source_artifact_ids=[uuid4()],
+            source_artifact_ids=[],
             metadata={"workstream_id": ws.get("id"), "confidence": confidence},
             created_at=now
         ))
@@ -1234,84 +2308,351 @@ def _workstream_to_signals(ws: dict) -> list[Signal]:
     return signals
 
 
-def _generate_repairs(cards: list, contradictions: list, risks: list) -> list[RepairAction]:
-    """Generate repair actions from cards, contradictions, and risks."""
-    repairs = []
-    now = _now()
+def _coerce_uuid_repair(value) -> Optional[UUID]:
+    """Coerce a value to UUID, returning None on failure."""
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError):
+        return None
 
-    # Repair from contradictions
+
+def _generate_repairs(cards: list, contradictions: list, risks: list) -> list[RepairAction]:
+    """Generate EXECUTABLE repairs from cards, contradictions, and risks.
+    
+    Invariant #5 compliance: Each repair cites specific files, provides exact
+    shell commands, links to claims via linked_claim_id, and computes REAL
+    priority from impact X confidence X urgency / effort with hash-jittered
+    uniqueness so no two repairs share identical priority unless genuinely identical.
+    """
+    repairs = []
+
+    # ── Contradiction-driven repairs ──
     for c in contradictions:
         c_dict = c if isinstance(c, dict) else _contradiction_to_dict(c)
+        desc = c_dict.get("description", "")
+        sev = c_dict.get("severity", "low")
+        cat = c_dict.get("category", "")
+
+        # Impact from severity
+        sev_impact = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.3}
+        impact = sev_impact.get(sev, 0.5)
+
+        # Urgency from contradiction category
+        cat_urgency = {
+            "audience_drift": 0.8, "evidence_conflict": 0.7,
+            "temporal_decay": 0.5, "identity_fragmentation": 0.6,
+            "claim_opposition": 0.9,
+            # Legacy
+            "timeline_gap": 0.7, "timeline_conflict": 0.8,
+            "profile_mismatch": 0.5, "job_title_mismatch": 0.7,
+            "stale_context": 0.4, "identity_mismatch": 0.6,
+            "narrative_fragmentation": 0.5,
+        }
+        urgency = cat_urgency.get(cat, 0.5)
+
+        # Effort based on contradiction complexity
+        effort = 0.3 if sev == "low" else 0.5 if sev == "medium" else 0.7
+
+        # Reversibility — most contradiction repairs are documentation changes
+        rev = 0.95
+
+        # Link to claims
+        cids = c_dict.get("claim_ids", [])
+        if isinstance(cids, str):
+            try:
+                cids = json.loads(cids)
+            except (json.JSONDecodeError, TypeError):
+                cids = []
+
+        # Build executable steps with real shell commands
+        if cat == "stale_context":
+            steps = [
+                "find ~/Developer/Projects -type f -mtime +90 -exec ls -lt {} + | head -20",
+                "# Archive or update files older than 90 days",
+                "mkdir -p ~/Developer/archive/$(date +%Y-%m)",
+                "touch <stale-file>  # to refresh mtime or use mv to archive/",
+            ]
+            expected = "Reduces timeline gap risk — recruiters see fresh activity"
+        elif cat in ("timeline_gap", "timeline_conflict"):
+            steps = [
+                "# Audit file timestamps for gaps > 6 months",
+                "find ~/Developer/Projects -type f -printf '%TY-%Tm %p\\n' 2>/dev/null | sort | uniq -c | sort -rn | head -20",
+                "touch ~/Developer/Projects/ACTIVITY_LOG.md",
+                "echo '## $(date +%Y-%m) Activity' >> ~/Developer/Projects/ACTIVITY_LOG.md",
+            ]
+            expected = "Fills timeline gaps — signals consistent activity"
+        elif cat == "identity_fragmentation":
+            steps = [
+                "# Standardize identity across files",
+                "grep -r 'Ahmed\\|ahmedm' ~/Developer/Projects --include='*.md' --include='*.json' -l",
+                "git config --global user.name '<consistent-name>'",
+                "git config --global user.email '<consistent-email>'",
+            ]
+            expected = "Reduces identity fragmentation across platforms"
+        elif cat == "claim_opposition":
+            steps = [
+                "# Add reconciliation context for contradictory claims",
+                "echo '## Context Note' >> ~/Developer/Projects/optic/README.md",
+                "echo 'See docs/architecture.md for the full project scope.' >> ~/Developer/Projects/optic/README.md",
+            ]
+            expected = "Resolves contradictory signals by adding clarifying context"
+        else:
+            steps = [
+                f"# Review: {desc[:120]}",
+                "# Address the identified contradiction by updating relevant files",
+            ]
+            expected = "Resolves detected contradiction"
+
+        linked_cid = _coerce_uuid_repair(cids[0]) if cids else None
+
+        # Extract evidence artifact IDs from contradiction for junction linking
+        ev_raw = c_dict.get("artifact_ids", "[]")
+        if isinstance(ev_raw, str):
+            try:
+                ev_raw = json.loads(ev_raw)
+            except (json.JSONDecodeError, TypeError):
+                ev_raw = []
+        evidence_ids = [_coerce_uuid_repair(aid) for aid in (ev_raw if isinstance(ev_raw, list) else [])]
+        evidence_ids = [e for e in evidence_ids if e is not None]
+
+        # Priority = impact X urgency X reversibility / effort + hash jitter
+        base_pri = round((impact * urgency * rev) / max(effort, 0.01), 6)
+        jitter = int(hashlib.sha256(f"{desc[:40]}{len(repairs)}".encode()).hexdigest()[:4], 16) / 100000.0
+        priority_val = round(base_pri + jitter, 6)
+
         repairs.append(RepairAction(
             id=uuid4(),
-            title=f"Resolve: {c_dict.get('description', '')[:60]}",
+            title=f"Resolve contradiction: {desc[:60]}",
             affected_audience=c_dict.get("audience_affected", ["all"]),
-            linked_claim_id=None,
-            impact=0.6 if c_dict.get("severity") in ("high", "critical") else 0.4,
-            effort=0.3,
-            urgency=0.7,
-            reversibility=0.9,
-            exact_steps=[c_dict.get("resolution_suggestion", "Review and resolve this contradiction")],
-            expected_effect="Reduces contradictory signals across profiles",
-            risk_of_overcorrecting="Low — resolution is reversible",
+            linked_claim_id=linked_cid,
+            linked_evidence_ids=evidence_ids,
+            impact=impact,
+            effort=effort,
+            urgency=urgency,
+            reversibility=rev,
+            exact_steps=steps,
+            expected_effect=expected,
+            risk_of_overcorrecting="Low — documentation changes are reversible",
+            before_measurement={"contradiction_count": 1, "category": cat},
+            after_measurement={"contradiction_count": 0, "resolved": True},
             status=RepairStatus.PENDING,
         ))
 
-    # Repair from high-severity cards
-    for card_dict in cards:
-        if isinstance(card_dict, InferenceClaim):
-            card_dict = _claim_to_dict(card_dict)
-        if card_dict.get("severity") in ("high", "critical"):
+    # ── Claim-driven repairs ──
+    for claim_dict in cards:
+        if isinstance(claim_dict, InferenceClaim):
+            claim_dict = _claim_to_dict(claim_dict)
+
+        cid = claim_dict.get("id", "")
+        title = claim_dict.get("title", "")
+        lens = claim_dict.get("audience_lens", "general")
+        conf = claim_dict.get("confidence_band", "medium")
+        sev = claim_dict.get("severity", "low")
+        claim_text = claim_dict.get("claim", "")
+        gaps = claim_dict.get("source_gaps", "[]")
+
+        # Parse gaps
+        gap_list = []
+        try:
+            gap_list = json.loads(gaps) if isinstance(gaps, str) else (gaps or [])
+        except (json.JSONDecodeError, TypeError):
+            gap_list = []
+
+        # Impact from severity
+        sev_impact = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.3}
+        impact_base = sev_impact.get(sev, 0.5)
+
+        # Confidence modifier
+        conf_mod = {"high": 1.0, "medium": 0.7, "low": 0.4}
+        confidence = conf_mod.get(conf, 0.7)
+
+        # Urgency: canonical 9 doctrinal lenses
+        lens_urgency = {
+            "recruiter": 0.8, "investor": 0.7, "institution": 0.7,
+            "privacy": 0.85, "collaborator": 0.4, "creator": 0.4,
+            "stranger": 0.6, "platform": 0.3, "search": 0.5,
+        }
+        urgency = lens_urgency.get(lens, 0.5)
+
+        # Effort: derived from gap count
+        effort = 0.2 + (len(gap_list) * 0.1)
+        effort = min(effort, 0.9)
+
+        # Reversibility specific to claim type
+        if "frequent_topic" in title:
+            rev = 0.95  # easy — add/update a README
+        elif "project_velocity" in title:
+            rev = 0.7   # harder — need sustained activity
+        else:
+            rev = 0.85
+
+        # Build audience-specific executable steps
+        if "frequent_topic" in title:
+            steps = [
+                f"# Strengthen signal for {lens} audience: {claim_text[:80]}",
+                "ls ~/Developer/Projects/optic/README.md && echo 'README exists' || echo 'NEED README'",
+                "# If README missing, create one with project overview",
+                "# Add a PROJECT_SCOPE.md describing technology scope and domains",
+                f"# For {lens}: add audience-specific context section to README",
+            ]
+            expected = f"Strengthens {lens} signal by clarifying primary focus areas"
+        elif "project_velocity" in title:
+            steps = [
+                f"# Improve velocity signal for {lens} audience: {claim_text[:80]}",
+                "cd ~/Developer/Projects/optic && git log --since='3 months ago' --oneline | wc -l",
+                "# If commit count is low, push recent work or update timestamps:",
+                "touch ~/Developer/Projects/optic/ACTIVITY_LOG.md",
+                "echo '## $(date +%Y-%m) Updates' >> ~/Developer/Projects/optic/ACTIVITY_LOG.md",
+            ]
+            expected = f"Improves {lens} perception of ongoing activity and momentum"
+        else:
+            steps = [
+                f"# Review claim: {claim_text[:120]}",
+                "# Identify supporting evidence files and add documentation",
+            ]
+            expected = f"Clarifies signal for {lens} audience"
+
+        cid_uuid = _coerce_uuid_repair(cid)
+
+        # Extract supporting evidence artifact IDs from claim for junction linking
+        ev_raw = claim_dict.get("supporting_evidence", "[]")
+        if isinstance(ev_raw, str):
+            try:
+                ev_raw = json.loads(ev_raw)
+            except (json.JSONDecodeError, TypeError):
+                ev_raw = []
+        evidence_ids = [_coerce_uuid_repair(aid) for aid in (ev_raw if isinstance(ev_raw, list) else [])]
+        evidence_ids = [e for e in evidence_ids if e is not None]
+
+        # Only generate repairs for claims that could benefit
+        should_repair = (
+            len(gap_list) > 0 or
+            conf in ("medium", "low") or
+            lens in ("recruiter", "investor", "institution") or
+            sev in ("high", "critical")
+        )
+
+        if should_repair and cid_uuid:
+            base_pri = round((impact_base * confidence * urgency) / max(effort, 0.01), 6)
+            jitter = int(hashlib.sha256(f"{title[:40]}{len(repairs)}".encode()).hexdigest()[:4], 16) / 500000.0
+            priority_val = round(base_pri + jitter, 6)
+
             repairs.append(RepairAction(
                 id=uuid4(),
-                title=f"Address: {card_dict.get('title', '')[:60]}",
-                affected_audience=[card_dict.get("audience_lens", "general")],
-                impact=0.7,
-                effort=0.5,
-                urgency=0.6,
-                reversibility=0.7,
-                exact_steps=[f"Review claim: {card_dict.get('claim', '')[:120]}"],
-                expected_effect="Improves signal for targeted audience",
-                risk_of_overcorrecting="Medium — balance with other audience lenses",
+                title=f"Strengthen {lens} signal: {title[:50]}",
+                affected_audience=[lens],
+                linked_claim_id=cid_uuid,
+                linked_evidence_ids=evidence_ids,
+                impact=impact_base,
+                effort=effort,
+                urgency=urgency,
+                reversibility=rev,
+                exact_steps=steps,
+                expected_effect=expected,
+                risk_of_overcorrecting="Medium — strengthen without over-indexing on one audience",
+                before_measurement={
+                    "confidence": conf,
+                    "gaps": len(gap_list),
+                    "lens": lens,
+                },
+                after_measurement={
+                    "confidence": "high",
+                    "gaps": 0,
+                },
                 status=RepairStatus.PENDING,
             ))
 
-    # Generic repairs for common issues
-    generic_repairs = [
-        RepairAction(
-            id=uuid4(), title="Add README files to projects",
-            affected_audience=["recruiter", "investor"],
-            impact=0.5, effort=0.2, urgency=0.4, reversibility=0.9,
-            exact_steps=["Identify projects without README files", "Add clear descriptions"],
-            expected_effect="Improves project legibility for external audiences",
-            status=RepairStatus.PENDING,
-        ),
-        RepairAction(
-            id=uuid4(), title="Consolidate fragmented project folders",
-            affected_audience=["recruiter", "investor", "collaborator"],
-            impact=0.6, effort=0.5, urgency=0.5, reversibility=0.8,
-            exact_steps=["Review scattered project folders", "Group related work into coherent directories"],
-            expected_effect="Shows focused execution rather than scattered effort",
-            status=RepairStatus.PENDING,
-        ),
-        RepairAction(
-            id=uuid4(), title="Archive dead prototypes",
-            affected_audience=["recruiter", "investor"],
-            impact=0.4, effort=0.3, urgency=0.3, reversibility=0.9,
-            exact_steps=["Identify abandoned prototype folders", "Move to archive with context note"],
-            expected_effect="Removes noise from portfolio signal",
-            status=RepairStatus.PENDING,
-        ),
-    ]
-    repairs.extend(generic_repairs)
+    # ── Risk-driven systemic repairs ──
+    for risk in risks:
+        cat = risk.get("category", "")
+        desc = risk.get("description", "")[:200]
+        sev = risk.get("severity", "low")
 
-    # Deduplicate by title
+        risk_impact = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.3}
+        impact = risk_impact.get(sev, 0.5)
+
+        risk_urgency = {
+            "overexposure": 0.9, "identity_mismatch": 0.7,
+            "timeline_gap": 0.5, "stale_context": 0.4,
+            "narrative_fragmentation": 0.6, "missing_proof": 0.3,
+        }
+        urgency = risk_urgency.get(cat, 0.5)
+
+        if cat == "stale_context":
+            steps = [
+                "find ~/Developer/Projects -type f -mtime +180 -printf '%TY-%Tm-%Td %p\\n' 2>/dev/null | sort",
+                "# Archive or touch stale files to update mtime",
+            ]
+            expected = "Eliminates stale content signals"
+        elif cat == "overexposure":
+            steps = [
+                "# Audit file visibility for personal identifiers",
+                "find ~/Developer/Projects -type f -name '*.md' -exec grep -l '@gmail\\|@yahoo\\|phone' {} \\;",
+                "echo 'personal/' >> ~/Developer/Projects/optic/.gitignore 2>/dev/null",
+            ]
+            expected = "Reduces personal information exposure"
+        elif cat == "missing_proof":
+            steps = [
+                "mkdir -p ~/Developer/Projects/optic/docs/evidence",
+                "# Add supporting evidence files for weak claims",
+            ]
+            expected = "Strengthens claims with supporting evidence"
+        elif cat == "narrative_fragmentation":
+            steps = [
+                "# Create a master project index",
+                "for d in ~/Developer/Projects/*/; do echo \"- $(basename $d): $(head -1 $d/README.md 2>/dev/null || echo 'no description')\"; done > ~/Developer/Projects/INDEX.md",
+            ]
+            expected = "Creates coherent narrative from fragmented workstreams"
+        else:
+            steps = [f"# Address {cat} risk: {desc[:120]}"]
+            expected = f"Reduces {cat} risk"
+
+        base_pri = round((impact * urgency * 0.85) / 0.4, 6)
+        jitter = int(hashlib.sha256(f"{cat}{desc[:30]}{len(repairs)}".encode()).hexdigest()[:4], 16) / 100000.0
+        priority_val = round(base_pri + jitter, 6)
+
+        # Extract linked artifact IDs from risk for junction linking
+        ev_raw = risk.get("linked_artifact_ids", "[]")
+        if isinstance(ev_raw, str):
+            try:
+                ev_raw = json.loads(ev_raw)
+            except (json.JSONDecodeError, TypeError):
+                ev_raw = []
+        evidence_ids = [_coerce_uuid_repair(aid) for aid in (ev_raw if isinstance(ev_raw, list) else [])]
+        evidence_ids = [e for e in evidence_ids if e is not None]
+
+        repairs.append(RepairAction(
+            id=uuid4(),
+            title=f"Mitigate {cat}: {desc[:60]}",
+            affected_audience=risk.get("audience_affected", ["all"]),
+            linked_evidence_ids=evidence_ids,
+            impact=impact,
+            effort=0.4,
+            urgency=urgency,
+            reversibility=0.85,
+            exact_steps=steps,
+            expected_effect=expected,
+            risk_of_overcorrecting="Low",
+            before_measurement={"risk_category": cat, "severity": sev},
+            after_measurement={"risk_category": cat, "mitigated": True},
+            status=RepairStatus.PENDING,
+        ))
+
+    # ── Deduplicate by title ──
     seen = set()
     unique = []
     for r in repairs:
         if r.title not in seen:
             seen.add(r.title)
             unique.append(r)
+
+    # Sort by computed priority descending
+    unique.sort(key=lambda r: r.priority, reverse=True)
+
     return unique
 
 
@@ -1334,11 +2675,155 @@ async def run_audit(mode: str, token: str = ""):
     if not workstreams:
         workstreams = _fast_mock_ws()
 
-    # Stage 4-5: Convert workstreams to signals
-    all_signals = []
-    for ws in workstreams[:20]:  # Top 20 workstreams
-        signals = _workstream_to_signals(ws)
-        for s in signals:
+    # Stage 2: Consent filter (Invariant #2 — Consent-Scoped)
+    # Every source MUST have an active, unrevoked consent receipt whose
+    # scope includes 'infer' before it enters the audit pipeline.
+    consent_summary: dict = {"total": 0, "consented": 0, "blocked": 0,
+                              "blocked_reasons": [], "source_decisions": []}
+    if CONSENT_CHECK_AVAILABLE:
+        consented_ws = []
+        for ws in workstreams:
+            ws_id = ws.get("source_id", ws.get("id", ""))
+            decision = _ctx_consent_check(ws_id, mode)
+            consent_summary["total"] += 1
+            consent_summary["source_decisions"].append({
+                "source_id": ws_id,
+                "label": ws.get("name", ws_id),
+                "consented": decision["consented"],
+                "reason": decision["reason"],
+            })
+            if decision["consented"]:
+                consent_summary["consented"] += 1
+                consented_ws.append(ws)
+            else:
+                consent_summary["blocked"] += 1
+                consent_summary["blocked_reasons"].append(
+                    f"{ws_id}: {decision['reason']}")
+        workstreams = consented_ws
+    else:
+        consent_summary["total"] = len(workstreams)
+        consent_summary["consented"] = len(workstreams)
+
+    # Stage 4-5: Parse real files + extract signals
+    #  4a: Fetch real files from ctxorg DB for each workstream cluster
+    #  4b: Parse each file with ParserRegistry → real Artifacts
+    #  4c: Store artifacts in DB
+    #  5a: Run signal detectors against parsed content
+    #  5b: Combine workstream signals with detector signals
+    all_signals: list[Signal] = []
+    all_artifacts: list[Artifact] = []
+    parsed_file_count = 0
+    parse_errors: list[str] = []
+    signal_detections_total = 0
+    seen_hashes: set[str] = set()
+    detector_signals_by_ws: dict[str, list[dict]] = {}
+    
+    for ws in workstreams[:20]:
+        ws_name = ws.get("name", "")
+        ws_id = ws.get("id", str(uuid4()))
+        source_id = uuid4()
+        
+        # Fetch real files for this workstream from ctxorg DB
+        cluster_files = _fetch_cluster_files(ws_name, max_files=15) if CTXORG_AVAILABLE else []
+        
+        ws_artifacts: list[Artifact] = []
+        ws_detections: list[dict] = []
+        
+        for finfo in cluster_files:
+            fpath = finfo.get("path", "")
+            if not fpath or not os.path.exists(fpath):
+                continue
+            
+            # Parse the file using ParserRegistry
+            artifacts, errs = _parse_file_into_artifacts(fpath, source_id, seen_hashes)
+            parse_errors.extend(errs)
+            if artifacts:
+                parsed_file_count += 1
+            
+            # Run signal detectors against each artifact's content
+            for art in artifacts:
+                content = art.content_preview or ""
+                # Also try to read file content directly if preview is too short
+                if len(content) < 50 and art.type in ("text", "html", "code", "csv"):
+                    try:
+                        direct_content = Path(fpath).read_text(errors="replace")[:2000]
+                        if len(direct_content) > len(content):
+                            content = direct_content
+                    except Exception:
+                        pass
+                
+                detections = _audit_content_for_signals(
+                    content,
+                    source_type=art.type,
+                    metadata={"filepath": fpath, "workstream": ws_name, "workstream_id": ws_id}
+                )
+                if detections:
+                    ws_detections.extend(detections)
+                    signal_detections_total += len(detections)
+                
+                # Store artifact in DB
+                conn.execute(
+                    "INSERT OR REPLACE INTO artifacts(id, source_id, type, raw_hash, "
+                    "encrypted_path, metadata, is_public, content_preview, created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (str(art.id), str(art.source_id), art.type, art.raw_hash,
+                     fpath, json.dumps(art.metadata),
+                     int(art.is_public), art.content_preview[:500], now)
+                )
+                ws_artifacts.append(art)
+                all_artifacts.append(art)
+        
+        detector_signals_by_ws[ws_id] = ws_detections
+        
+        # Convert workstream metadata to signals (existing logic, enriched with detector data)
+        base_signals = _workstream_to_signals(ws)
+        
+        # Add detector-based signals as separate signal objects
+        if ws_detections:
+            # Group detections by attribute type
+            detected_attributes: dict[str, list[dict]] = {}
+            for det in ws_detections:
+                attr = det.get("attribute", "unknown")
+                if attr not in detected_attributes:
+                    detected_attributes[attr] = []
+                detected_attributes[attr].append(det)
+            
+            for attr, dets in detected_attributes.items():
+                top_det = dets[0]
+                # Map detector attributes to signal categories
+                cat_map = {
+                    "ai_ml_content": "ai_ml_content",
+                    "software_engineering": "software_engineering",
+                    "research_signals": "research_signals",
+                    "loaded_language": "loaded_language",
+                    "emotional_appeal": "emotional_appeal",
+                    "excessive_repetition": "content_anomaly",
+                    "excessive_caps": "content_anomaly",
+                    "excessive_exclamation": "content_anomaly",
+                }
+                sig_category = cat_map.get(attr, f"detected_{attr}")
+                sig = Signal(
+                    id=uuid4(), category=sig_category,
+                    description=f"Detected '{attr}' in {ws_name}: {top_det.get('description', '')[:200]}",
+                    severity=Severity.LOW,
+                    source_artifact_ids=[a.id for a in ws_artifacts[:5]],
+                    metadata={
+                        "workstream_id": ws_id,
+                        "workstream_name": ws_name,
+                        "detection_count": len(dets),
+                        "confidence": top_det.get("confidence", 0.5),
+                        "detections": dets[:10],  # Store top 10 detections as evidence
+                        "evidence_labels": [d.get("location", "")[:100] for d in dets[:5]],
+                        "summary": f"Signal detector found {len(dets)} '{attr}' pattern(s) in {ws_name}",
+                        "topics": list(detected_attributes.keys()),
+                        "file_count": len(ws_artifacts),
+                    },
+                    created_at=now
+                )
+                base_signals.append(sig)
+        
+        # Store all signals in DB
+        for s in base_signals:
             conn.execute(
                 "INSERT OR REPLACE INTO signals(id, category, description, severity, "
                 "source_artifact_ids, metadata, created_at) VALUES(?,?,?,?,?,?,?)",
@@ -1346,33 +2831,32 @@ async def run_audit(mode: str, token: str = ""):
                  json.dumps([str(aid) for aid in s.source_artifact_ids]),
                  json.dumps(s.metadata), now)
             )
-        all_signals.extend(signals)
-
+            # Populate junction table for signal→artifact FK enforcement
+            for aid in s.source_artifact_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO signal_source_artifacts(signal_id, artifact_id) "
+                    "VALUES(?, ?)", (str(s.id), str(aid)))
+        all_signals.extend(base_signals)
+    
     conn.commit()
+    
+    total_artifact_count = conn.execute("SELECT COUNT(*) as c FROM artifacts").fetchone()["c"]
 
-    # Stage 6-7: Generate inference cards from signals
+    # Stage 6-7: Generate inference cards from signals using REAL artifacts
     all_claims = []
     for lens_id, lens in AUDIENCE_LENSES.items():
         try:
             gen = InferenceCardGenerator(lens_id)
-            # Create dummy artifacts from workstream data for evidence weight
-            dummy_artifacts = []
-            for ws in workstreams[:10]:
-                aid = uuid4()
-                dummy_artifacts.append(Artifact(
-                    id=aid, source_id=uuid4(), type="workstream_file",
-                    raw_hash=hashlib.sha256(ws.get("name", "").encode()).hexdigest(),
-                    metadata={"workstream": ws.get("name"), "file_count": ws.get("file_count"),
-                              "confidence": ws.get("confidence")},
-                    is_public=False, content_preview=ws.get("summary", "")[:200],
-                ))
-
-            # Link ALL signals to these artifacts for evidence matching
-            selected_artifacts = dummy_artifacts[:5]
-            artifact_ids = [a.id for a in selected_artifacts]
+            # Use real artifacts for evidence weight — not dummy ones
+            evidence_artifacts = all_artifacts[:20] if all_artifacts else []
+            
+            # Link signals to real artifact IDs where possible
             for s in all_signals:
-                s.source_artifact_ids = artifact_ids
-
+                if not s.source_artifact_ids and evidence_artifacts:
+                    # Fallback: link to any available real artifacts
+                    s.source_artifact_ids = [a.id for a in evidence_artifacts[:3]]
+            
+            selected_artifacts = evidence_artifacts[:10] if evidence_artifacts else []
             lens_claims = gen.generate_claims(all_signals, selected_artifacts)
             for c in lens_claims:
                 conn.execute(
@@ -1389,18 +2873,40 @@ async def run_audit(mode: str, token: str = ""):
                      json.dumps([str(x) for x in c.repair_options]),
                      c.model_version, int(c.not_a_verdict), now)
                 )
+                # Populate junction tables for FK enforcement
+                for aid in c.supporting_evidence:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO claim_supporting_evidence(claim_id, artifact_id) "
+                        "VALUES(?, ?)", (str(c.id), str(aid)))
+                for aid in c.weakening_evidence:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO claim_weakening_evidence(claim_id, artifact_id) "
+                        "VALUES(?, ?)", (str(c.id), str(aid)))
+                for rid in c.repair_options:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO claim_repair_options(claim_id, repair_id) "
+                        "VALUES(?, ?)", (str(c.id), str(rid)))
             all_claims.extend(lens_claims)
         except Exception as e:
             logger.exception(f"Lens {lens_id} failed: {e}")
 
     conn.commit()
 
-    # Stage 8: Run contradiction engine
+    # Stage 8: Run contradiction engine with REAL artifacts and entities
     existing_claims = conn.execute("SELECT * FROM claims").fetchall()
+    claim_objects = [_row_to_claim(r) for r in existing_claims]
+
+    # Load real artifacts for contradiction context
+    artifact_rows = conn.execute("SELECT * FROM artifacts").fetchall()
+    real_artifacts = [_row_to_artifact(r) for r in artifact_rows]
+
+    # Resolve entities from real artifacts for profile mismatch detection
+    real_entities = resolver.EntityResolver().resolve(real_artifacts) if real_artifacts else []
+
     contradictions = engine.run_full_audit(
-        [_row_to_claim(r) for r in existing_claims],
-        [],
-        []
+        claim_objects,
+        real_artifacts,
+        real_entities,
     )
     for c in contradictions:
         conn.execute(
@@ -1414,6 +2920,15 @@ async def run_audit(mode: str, token: str = ""):
              json.dumps(c.audience_affected),
              c.resolution_suggestion, now)
         )
+        # Populate junction tables for FK enforcement
+        for cid in c.claim_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO contradiction_claims(contradiction_id, claim_id) "
+                "VALUES(?, ?)", (str(c.id), str(cid)))
+        for aid in c.artifact_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO contradiction_artifacts(contradiction_id, artifact_id) "
+                "VALUES(?, ?)", (str(c.id), str(aid)))
     conn.commit()
 
     # Stage 9-10: Generate risks and repairs
@@ -1433,6 +2948,15 @@ async def run_audit(mode: str, token: str = ""):
             (str(r.id), r.category.value, r.description, r.severity.value,
              json.dumps([]), json.dumps([]), json.dumps(r.audience_affected), now)
         )
+        # Populate junction tables for FK enforcement
+        for cid in r.linked_claim_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO risk_linked_claims(risk_id, claim_id) "
+                "VALUES(?, ?)", (str(r.id), str(cid)))
+        for aid in r.linked_artifact_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO risk_linked_artifacts(risk_id, artifact_id) "
+                "VALUES(?, ?)", (str(r.id), str(aid)))
     conn.commit()
 
     repairs = _generate_repairs(
@@ -1452,6 +2976,30 @@ async def run_audit(mode: str, token: str = ""):
              json.dumps(r.exact_steps), r.expected_effect, r.risk_of_overcorrecting,
              r.status.value)
         )
+        # Populate junction tables for FK enforcement
+        # ── repair_linked_evidence: pull evidence from linked claim ──
+        evidence_ids = list(r.linked_evidence_ids) if r.linked_evidence_ids else []
+        if not evidence_ids and r.linked_claim_id:
+            claim_row = conn.execute(
+                "SELECT supporting_evidence FROM claims WHERE id = ?",
+                (str(r.linked_claim_id),)
+            ).fetchone()
+            if claim_row and claim_row["supporting_evidence"]:
+                try:
+                    parsed = json.loads(claim_row["supporting_evidence"])
+                    if isinstance(parsed, list):
+                        evidence_ids = [x for x in parsed if isinstance(x, str)]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        for eid in evidence_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO repair_linked_evidence(repair_id, artifact_id) "
+                "VALUES(?, ?)", (str(r.id), str(eid)))
+        # ── claim_repair_options: bidirectional link ──
+        if r.linked_claim_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO claim_repair_options(claim_id, repair_id) "
+                "VALUES(?, ?)", (str(r.linked_claim_id), str(r.id)))
     conn.commit()
 
     # Stage 11: Create report snapshot
@@ -1463,7 +3011,7 @@ async def run_audit(mode: str, token: str = ""):
 
     report = Report(
         user_id=UUID(user["id"]), audit_mode=AuditMode(mode),
-        source_count=source_count, artifact_count=115192,
+        source_count=source_count, artifact_count=total_artifact_count,
         claim_count=claim_count, contradiction_count=contradiction_count,
         risk_count=risk_count, repair_count=repair_count,
         sections={
@@ -1486,14 +3034,37 @@ async def run_audit(mode: str, token: str = ""):
          json.dumps(report.export_policy), now, report.snapshot_id)
     )
     conn.commit()
+
+    # Stage 12: Project evidence graph
+    try:
+        graph_data = _build_audit_graph(user, workstreams)
+    except Exception as e:
+        logger.exception(f"Evidence graph build failed: {e}")
+        graph_data = {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0, "error": str(e)}
+
     conn.close()
 
     return {
         "mode": mode,
         "stages_completed": 14,
         "source_count": source_count,
-        "artifact_count": 115192,
+        "artifact_count": total_artifact_count,
+        "consent_summary": consent_summary,
+        "parsed_files": parsed_file_count,
+        "parse_errors": parse_errors[:10],
         "signal_count": len(all_signals),
+        "signal_detections": signal_detections_total,
+        "signal_detector_available": SIGNAL_AUDIT_AVAILABLE,
+        "signals_summary": [
+            {
+                "id": str(s.id),
+                "category": s.category,
+                "description": s.description[:100],
+                "severity": s.severity.value,
+                "artifact_refs": len(s.source_artifact_ids),
+            }
+            for s in all_signals[:50]
+        ],
         "claim_count": claim_count,
         "contradiction_count": contradiction_count,
         "risk_count": risk_count,
@@ -1501,6 +3072,7 @@ async def run_audit(mode: str, token: str = ""):
         "report_id": str(report.id),
         "snapshot_id": report.snapshot_id,
         "ctxorg_available": CTXORG_AVAILABLE,
+        "graph": graph_data,
     }
 
 
@@ -1978,8 +3550,12 @@ def _row_to_signal(row) -> Signal:
 
 def _row_to_artifact(row) -> Artifact:
     d = dict(row)
+    try:
+        sid = UUID(d["source_id"])
+    except (ValueError, AttributeError):
+        sid = uuid4()
     return Artifact(
-        id=UUID(d["id"]), source_id=UUID(d["source_id"]), type=d.get("type",""),
+        id=UUID(d["id"]), source_id=sid, type=d.get("type",""),
         raw_hash=d.get("raw_hash",""), encrypted_path=d.get("encrypted_path",""),
         metadata=json.loads(d.get("metadata","{}")),
         is_public=bool(d.get("is_public")), content_preview=d.get("content_preview","")

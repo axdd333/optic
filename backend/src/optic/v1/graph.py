@@ -1,4 +1,10 @@
 """
+# DEPRECATED — never imported by the running ctxorg/server.py
+# Only referenced in optic/v1/server.py which is NOT the active server.
+# Stage 12 (Graph projection) is scheduled for remediation — this module
+# will be wired into ctxorg/server.py when that stage is complete.
+# DO NOT DELETE — keep as reference implementation for pipeline Stage 12.
+
 Optic V1 evidence graph storage.
 
 Typed SQLite graph for identity audit evidence. Edges are directed, but read
@@ -82,6 +88,92 @@ class EvidenceGraph:
                 updated_at = excluded.updated_at
             """,
             (nid, node_type, label, self._dumps(payload), now, now),
+        )
+        self.conn.commit()
+        node = self.get_node(nid)
+        if node is None:
+            raise RuntimeError(f"node was not persisted: {nid}")
+        return node
+
+    def merge_node(
+        self,
+        node_type: str,
+        node_id: str | UUID,
+        *,
+        label: str = "",
+        data: dict[str, Any] | None = None,
+        provenance: str | None = None,
+        **attrs: Any,
+    ) -> dict[str, Any]:
+        """Insert a node or merge provenance data into an existing one.
+
+        Unlike add_node (which overwrites data on conflict), this method
+        merges new data fields into the existing node and accumulates
+        provenance records so a node that appears in multiple contexts
+        tracks all of its source categories.
+
+        The ``provenance`` parameter is a category label (e.g. audience
+        lens name, workstream name) that is appended to the node's
+        ``data.source_provenance`` list — deduplicating entries so each
+        category appears exactly once.
+        """
+        self._require_type(node_type, NODE_TYPES, "node")
+        nid = str(node_id)
+
+        existing = self.get_node(nid)
+        if existing is None:
+            # First time — insert fresh.
+            payload = dict(data or {})
+            if provenance:
+                payload.setdefault("source_provenance", []).append(provenance)
+            payload.update(attrs)
+            now = self._now()
+            self.conn.execute(
+                """
+                INSERT INTO nodes(id, type, label, data, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (nid, node_type, label, self._dumps(payload), now, now),
+            )
+            self.conn.commit()
+            node = self.get_node(nid)
+            if node is None:
+                raise RuntimeError(f"node was not persisted: {nid}")
+            return node
+
+        # Node exists — merge provenance and new data fields.
+        merged_data = dict(existing.get("data", {}) or {})
+        if data:
+            for key, value in data.items():
+                if key == "source_provenance":
+                    # Accumulate provenance entries — no duplicates.
+                    existing_prov = set(merged_data.get("source_provenance", []))
+                    new_entries = value if isinstance(value, list) else [value]
+                    for entry in new_entries:
+                        if entry not in existing_prov:
+                            merged_data.setdefault("source_provenance", []).append(entry)
+                            existing_prov.add(entry)
+                elif key in merged_data:
+                    # For scalar fields, keep the existing value (first-write wins)
+                    # unless the existing value is a placeholder.
+                    if merged_data[key] in (None, "", "unknown"):
+                        merged_data[key] = value
+                else:
+                    merged_data[key] = value
+
+        if provenance:
+            existing_prov = set(merged_data.get("source_provenance", []))
+            if provenance not in existing_prov:
+                merged_data.setdefault("source_provenance", []).append(provenance)
+                existing_prov.add(provenance)
+
+        merged_data.update(attrs)
+        now = self._now()
+        self.conn.execute(
+            """
+            UPDATE nodes SET data = ?, updated_at = ? WHERE id = ?
+            """,
+            (self._dumps(merged_data), now, nid),
         )
         self.conn.commit()
         node = self.get_node(nid)

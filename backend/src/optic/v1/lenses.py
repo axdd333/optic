@@ -3,6 +3,9 @@ Optic V1 — Audience Lens Configurations
 ========================================
 Each lens has priorities, evidence preferences, common false positives,
 risk sensitivity, repair preferences, forbidden outputs, and confidence rules.
+
+Canonical 9: Recruiter, Investor, Collaborator, Creator, Privacy,
+              Platform, Search, Institution, Stranger
 """
 from .models import AudienceLens
 
@@ -81,37 +84,37 @@ AUDIENCE_LENSES: dict[str, AudienceLens] = {
             "downgrade_for_contradictions": True,
         }
     ),
-    "admissions": AudienceLens(
-        id="admissions",
-        name="Admissions read",
-        icon="🎓",
+    "collaborator": AudienceLens(
+        id="collaborator",
+        name="Collaborator / cofounder read",
+        icon="🔗",
         priorities=[
-            "intellectual_seriousness", "consistency", "maturity",
-            "achievement_evidence", "trajectory", "curiosity_depth"
+            "execution_style", "chaos_risk", "complementary_skill",
+            "trust", "communication", "reliability_signal"
         ],
         evidence_preferences=[
-            "academic_record", "project_portfolio", "public_writing",
-            "recommendations", "extracurricular_depth", "competitions"
+            "github_collaboration", "project_history",
+            "public_interactions", "team_context", "references"
         ],
         common_false_positives=[
-            "gap_year_reads_as_risk",
-            "creative_work_reads_as_soft",
-            "online_presence_reads_as_professional_focus"
+            "solo_work_reads_as_poor_team_player",
+            "many_projects_reads_as_unfocused",
+            "no_public_team_work_reads_as_isolated"
         ],
-        risk_sensitivity=0.5,
+        risk_sensitivity=0.6,
         repair_preferences=[
-            "add_achievement_context", "align_application_materials",
-            "clean_public_social", "add_letter_writers"
+            "add_collaboration_context", "link_team_projects",
+            "add_recommendations", "show_work_style"
         ],
         forbidden_outputs=[
-            "admissions_prediction",
-            "candidate_ranking",
-            "fit_score"
+            "personality_assessment",
+            "team_fit_prediction",
+            "culture_score"
         ],
         confidence_rules={
             "min_evidence_count": 1,
-            "require_academic_evidence": True,
-            "max_recency_days": 730,
+            "require_collaboration_evidence": True,
+            "max_recency_days": 365,
             "downgrade_for_contradictions": True,
         }
     ),
@@ -150,6 +153,167 @@ AUDIENCE_LENSES: dict[str, AudienceLens] = {
             "downgrade_for_contradictions": True,
         }
     ),
+    "privacy": AudienceLens(
+        id="privacy",
+        name="Privacy read",
+        icon="🔒",
+        priorities=[
+            "exposure_surface", "credential_leakage", "location_tracking",
+            "identity_anchors", "behavioral_fingerprints",
+            "third_party_linkage", "metadata_retention"
+        ],
+        evidence_preferences=[
+            "browser_history", "search_queries", "location_data",
+            "public_profiles", "social_posts", "app_permissions",
+            "metadata_trails", "cookie_footprint"
+        ],
+        common_false_positives=[
+            "routine_activity_reads_as_location_pattern",
+            "research_queries_reads_as_behavioral_signal",
+            "metadata_noise_reads_as_fingerprint",
+            "shared_device_signals_mixed"
+        ],
+        risk_sensitivity=0.9,
+        repair_preferences=[
+            "clear_cookies", "use_privacy_mode",
+            "opt_out_ad_personalization", "separate_profiles",
+            "strip_metadata", "audit_app_permissions",
+            "enable_do_not_track"
+        ],
+        forbidden_outputs=[
+            "privacy_score",
+            "identity_risk_rating",
+            "surveillance_recommendation",
+            "adversary_playbook"
+        ],
+        confidence_rules={
+            "min_evidence_count": 1,
+            "require_behavioral_evidence": True,
+            "max_recency_days": 30,
+            "downgrade_for_shared_device": True,
+            "always_flag_exposure_surface": True,
+        }
+    ),
+    "platform": AudienceLens(
+        id="platform",
+        name="Platform / algorithm read",
+        icon="📊",
+        priorities=[
+            "interest_categories", "consumer_intent",
+            "demographic_proxies", "behavioral_signals",
+            "content_affinity", "engagement_patterns"
+        ],
+        evidence_preferences=[
+            "browser_history", "search_queries", "social_engagement",
+            "purchase_history", "location_data", "content_interactions"
+        ],
+        common_false_positives=[
+            "research_reads_as_interest",
+            "gift_buying_reads_as_personal_interest",
+            "shared_device_signals_mixed",
+            "content_creator_reads_as_consumer"
+        ],
+        risk_sensitivity=0.3,
+        repair_preferences=[
+            "clear_cookies", "use_privacy_mode",
+            "opt_out_ad_personalization", "separate_profiles",
+            "limit_platform_sharing"
+        ],
+        forbidden_outputs=[
+            "consumer_value_score",
+            "ad_targeting_profile_export",
+            "purchase_prediction",
+            "content_recommendation"
+        ],
+        confidence_rules={
+            "min_evidence_count": 1,
+            "require_behavioral_evidence": True,
+            "max_recency_days": 30,
+            "downgrade_for_shared_device": True,
+        }
+    ),
+    "search": AudienceLens(
+        id="search",
+        name="Search engine read",
+        icon="🔍",
+        priorities=[
+            "search_appearance", "result_freshness", "relevance_signals",
+            "content_quality", "authority_signals", "query_associations",
+            "snippet_accuracy"
+        ],
+        evidence_preferences=[
+            "search_results", "public_pages", "meta_tags",
+            "structured_data", "backlinks", "social_profiles",
+            "knowledge_panel_entries"
+        ],
+        common_false_positives=[
+            "stale_search_results",
+            "same_name_different_person",
+            "automated_summary_distortion",
+            "outdated_meta_tags",
+            "search_bubble_effects"
+        ],
+        risk_sensitivity=0.7,
+        repair_preferences=[
+            "fix_search_results", "update_all_bios",
+            "add_personal_site", "claim_knowledge_panels",
+            "add_schema_markup", "refresh_public_pages"
+        ],
+        forbidden_outputs=[
+            "seo_score",
+            "page_rank_estimate",
+            "search_ranking_guarantee",
+            "click_prediction"
+        ],
+        confidence_rules={
+            "min_evidence_count": 1,
+            "require_public_evidence": True,
+            "max_recency_days": 60,
+            "downgrade_for_stale_results": True,
+            "flag_name_collisions": True,
+        }
+    ),
+    "institution": AudienceLens(
+        id="institution",
+        name="Institution read",
+        icon="🏛",
+        priorities=[
+            "credential_verification", "stability_indicators",
+            "formal_records", "compliance_surface",
+            "institutional_fit", "background_consistency"
+        ],
+        evidence_preferences=[
+            "academic_records", "employment_verification",
+            "financial_history", "official_documents",
+            "credentials", "certifications",
+            "public_records"
+        ],
+        common_false_positives=[
+            "creative_work_reads_as_risk",
+            "gap_periods_reads_as_instability",
+            "self_employment_reads_as_unemployed",
+            "international_experience_reads_as_unverifiable"
+        ],
+        risk_sensitivity=0.6,
+        repair_preferences=[
+            "add_achievement_context", "align_application_materials",
+            "clean_public_social", "add_verification_records",
+            "document_credential_trail", "bridge_timeline_gaps"
+        ],
+        forbidden_outputs=[
+            "eligibility_prediction",
+            "admission_prediction",
+            "loan_worthiness",
+            "candidate_ranking"
+        ],
+        confidence_rules={
+            "min_evidence_count": 1,
+            "require_formal_evidence": True,
+            "max_recency_days": 730,
+            "downgrade_for_contradictions": True,
+            "downgrade_for_self_reported_only": True,
+        }
+    ),
     "stranger": AudienceLens(
         id="stranger",
         name="Stranger read",
@@ -184,144 +348,6 @@ AUDIENCE_LENSES: dict[str, AudienceLens] = {
             "require_public_evidence": True,
             "max_recency_days": 60,
             "downgrade_for_stale_context": True,
-        }
-    ),
-    "customer": AudienceLens(
-        id="customer",
-        name="Customer / client read",
-        icon="🤝",
-        priorities=[
-            "credibility", "reliability", "polish", "domain_authority",
-            "social_proof", "professional_presence"
-        ],
-        evidence_preferences=[
-            "testimonials", "portfolio", "credentials", "website",
-            "professional_profiles", "published_work"
-        ],
-        common_false_positives=[
-            "small_portfolio_reads_as_inexperienced",
-            "no_testimonials_reads_as_risky",
-            "personal_content_reads_as_unprofessional"
-        ],
-        risk_sensitivity=0.5,
-        repair_preferences=[
-            "add_testimonials", "build_portfolio_page",
-            "add_case_studies", "link_credentials",
-            "add_faq_page"
-        ],
-        forbidden_outputs=[
-            "professional_quality_score",
-            "hiring_recommendation",
-            "trust_rating"
-        ],
-        confidence_rules={
-            "min_evidence_count": 1,
-            "require_professional_evidence": True,
-            "max_recency_days": 365,
-            "downgrade_for_contradictions": True,
-        }
-    ),
-    "collaborator": AudienceLens(
-        id="collaborator",
-        name="Collaborator / cofounder read",
-        icon="🔗",
-        priorities=[
-            "execution_style", "chaos_risk", "complementary_skill",
-            "trust", "communication", "reliability_signal"
-        ],
-        evidence_preferences=[
-            "github_collaboration", "project_history",
-            "public_interactions", "team_context", "references"
-        ],
-        common_false_positives=[
-            "solo_work_reads_as_poor_team_player",
-            "many_projects_reads_as_unfocused",
-            "no_public_team_work_reads_as_isolated"
-        ],
-        risk_sensitivity=0.6,
-        repair_preferences=[
-            "add_collaboration_context", "link_team_projects",
-            "add_recommendations", "show_work_style"
-        ],
-        forbidden_outputs=[
-            "personality_assessment",
-            "team_fit_prediction",
-            "culture_score"
-        ],
-        confidence_rules={
-            "min_evidence_count": 1,
-            "require_collaboration_evidence": True,
-            "max_recency_days": 365,
-            "downgrade_for_contradictions": True,
-        }
-    ),
-    "ad_platform": AudienceLens(
-        id="ad_platform",
-        name="Ad platform read",
-        icon="📊",
-        priorities=[
-            "interest_categories", "consumer_intent",
-            "demographic_proxies", "behavioral_signals"
-        ],
-        evidence_preferences=[
-            "browser_history", "search_queries", "social_engagement",
-            "purchase_history", "location_data"
-        ],
-        common_false_positives=[
-            "research_reads_as_interest",
-            "gift_buying_reads_as_personal_interest",
-            "shared_device_signals_mixed"
-        ],
-        risk_sensitivity=0.3,
-        repair_preferences=[
-            "clear_cookies", "use_privacy_mode",
-            "opt_out_ad_personalization", "separate_profiles"
-        ],
-        forbidden_outputs=[
-            "consumer_value_score",
-            "ad_targeting_profile_export",
-            "purchase_prediction"
-        ],
-        confidence_rules={
-            "min_evidence_count": 1,
-            "require_behavioral_evidence": True,
-            "max_recency_days": 30,
-            "downgrade_for_shared_device": True,
-        }
-    ),
-    "future_agent": AudienceLens(
-        id="future_agent",
-        name="Future AI agent read",
-        icon="🤖",
-        priorities=[
-            "compressed_summary_risk", "stale_context_risk",
-            "machine_readable_persona", "data_portability"
-        ],
-        evidence_preferences=[
-            "structured_profiles", "public_data_feeds",
-            "search_snippets", "knowledge_graph_entries"
-        ],
-        common_false_positives=[
-            "summary_distortion",
-            "context_collapse",
-            "temporal_misalignment",
-            "source_attribution_errors"
-        ],
-        risk_sensitivity=1.0,
-        repair_preferences=[
-            "add_schema_markup", "maintain_canonical_profiles",
-            "refresh_public_data", "claim_knowledge_panels"
-        ],
-        forbidden_outputs=[
-            "ai_readiness_score",
-            "future_hirability_prediction",
-            "automated_character_assessment"
-        ],
-        confidence_rules={
-            "min_evidence_count": 1,
-            "always_flag_stale_context": True,
-            "max_recency_days": 30,
-            "require_source_attribution": True,
         }
     ),
 }

@@ -1,4 +1,10 @@
-"""Dependency-free entity extraction and linking for Optic V1 evidence."""
+"""
+# DEPRECATED — never imported by the running ctxorg/server.py
+# Blocked behind Stage 3-4 (Artifact Selection + Evidence Extraction).
+# EntityResolver requires real parsed artifacts which aren't yet flowing.
+# Will be wired when C2/C5 remediation is complete.
+# DO NOT DELETE — keep as reference implementation for pipeline Stage 8.
+"""
 from __future__ import annotations
 
 import re

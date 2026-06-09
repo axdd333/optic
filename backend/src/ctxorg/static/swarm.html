@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Optic Swarm — Agent Dashboard</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0c14; color:#d0d3e0; font-family:'JetBrains Mono','SF Mono',monospace; padding:24px; }
+  h1 { font-size:28px; margin-bottom:4px; }
+  .sub { color:#6b7280; font-size:13px; margin-bottom:24px; }
+  .stats { display:flex; gap:16px; margin-bottom:24px; flex-wrap:wrap; }
+  .stat { background:#11131f; border:1px solid #1a1d2e; border-radius:12px; padding:16px 20px; min-width:140px; }
+  .stat-num { font-size:36px; font-weight:700; }
+  .stat-label { font-size:11px; color:#6b7280; text-transform:uppercase; letter-spacing:1px; }
+  .status-bar { display:flex; gap:12px; margin-bottom:24px; align-items:center; }
+  .status-dot { width:10px; height:10px; border-radius:50%; }
+  .status-dot.ok { background:#22c55e; box-shadow:0 0 8px #22c55e; }
+  .status-dot.warn { background:#f59e0b; box-shadow:0 0 8px #f59e0b; }
+  .status-dot.dead { background:#ef4444; }
+  .departments { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:12px; }
+  .dept { background:#11131f; border:1px solid #1a1d2e; border-radius:12px; overflow:hidden; }
+  .dept-head { padding:14px 16px; border-bottom:1px solid #1a1d2e; display:flex; justify-content:space-between; align-items:center; }
+  .dept-name { font-size:15px; font-weight:600; }
+  .dept-count { font-size:11px; color:#6b7280; }
+  .agent-row { padding:8px 16px; border-bottom:1px solid #0e1020; display:flex; align-items:center; gap:10px; font-size:12px; }
+  .agent-row:last-child { border-bottom:none; }
+  .agent-status { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .agent-status.idle { background:#374151; }
+  .agent-status.working { background:#3b82f6; animation:pulse 1.5s infinite; }
+  .agent-status.done { background:#22c55e; }
+  .agent-status.failed { background:#ef4444; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .agent-name { flex:1; color:#9ca3af; }
+  .agent-role { color:#6b7280; font-size:10px; }
+  .agent-task { color:#4b5563; font-size:10px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .live { display:inline-block; font-size:10px; color:#22c55e; margin-left:8px; }
+  .live::before { content:'● '; }
+</style>
+</head>
+<body>
+<h1>Optic Swarm <span class="live">LIVE</span></h1>
+<p class="sub">73 agents across 10 departments · hyperdoc-driven · MAX STRESS</p>
+
+<div class="stats">
+  <div class="stat"><div class="stat-num" style="color:#22c55e">73</div><div class="stat-label">Total Agents</div></div>
+  <div class="stat"><div class="stat-num" style="color:#3b82f6">3</div><div class="stat-label">Active</div></div>
+  <div class="stat"><div class="stat-num" style="color:#22c55e">2</div><div class="stat-label">Completed</div></div>
+  <div class="stat"><div class="stat-num" style="color:#f59e0b">1</div><div class="stat-label">Retrying</div></div>
+  <div class="stat"><div class="stat-num" style="color:#6b7280">67</div><div class="stat-label">Queued</div></div>
+</div>
+
+<div class="status-bar">
+  <span class="status-dot ok"></span> <span style="font-size:13px">Server: 8787</span>
+  <span style="margin-left:16px;font-size:12px;color:#6b7280">108 claims · 6 workstreams · DeepSeek loaded</span>
+</div>
+
+<div class="departments" id="depts"></div>
+
+<script>
+const depts = [
+  { name:"ONBOARDING", agents:[
+    {n:"optic-onboard",r:"flow lead",s:"done"},
+    {n:"optic-consent",r:"consent ledger",s:"idle"},
+    {n:"optic-source",r:"source approval",s:"idle"},
+    {n:"optic-welcome",r:"welcome UI",s:"idle"},
+    {n:"optic-flow",r:"onboarding flow UI",s:"idle"}
+  ]},
+  { name:"SCRAPER / OSINT", agents:[
+    {n:"optic-scraper",r:"scraper lead",s:"working",t:"URL scraper"},
+    {n:"optic-github",r:"GitHub provider",s:"idle"},
+    {n:"optic-search",r:"search APIs",s:"idle"},
+    {n:"optic-osint",r:"OSINT research",s:"idle"},
+    {n:"optic-social",r:"social import",s:"idle"}
+  ]},
+  { name:"PIPELINE", agents:[
+    {n:"optic-pipe-audit",r:"pipeline lead",s:"idle"},
+    {n:"optic-signal",r:"signal extraction",s:"idle"},
+    {n:"optic-evidence",r:"evidence gating",s:"idle"},
+    {n:"optic-contra",r:"contradiction detection",s:"idle"},
+    {n:"optic-risk-eng",r:"risk engine",s:"idle"}
+  ]},
+  { name:"INFERENCE", agents:[
+    {n:"optic-brain",r:"inference lead",s:"idle"},
+    {n:"optic-lens",r:"audience lenses",s:"idle"},
+    {n:"optic-claim",r:"claim generation",s:"idle"},
+    {n:"optic-score",r:"confidence scoring",s:"idle"},
+    {n:"optic-doctrine",r:"safety rules",s:"idle"}
+  ]},
+  { name:"REPAIR / REPORT", agents:[
+    {n:"optic-fix",r:"repair lead",s:"idle"},
+    {n:"optic-report",r:"report generation",s:"idle"},
+    {n:"optic-export",r:"export engine",s:"idle"},
+    {n:"optic-snapshot",r:"audit snapshots",s:"idle"},
+    {n:"optic-queue",r:"repair queue",s:"idle"}
+  ]},
+  { name:"UI / UX", agents:[
+    {n:"optic-pixel",r:"UI lead",s:"done"},
+    {n:"optic-screen",r:"screen builder",s:"idle"},
+    {n:"optic-dash-ui",r:"dashboard",s:"idle"},
+    {n:"optic-graph-ui",r:"topology UI",s:"idle"},
+    {n:"optic-iris-ui",r:"iris chat UI",s:"idle"},
+    {n:"optic-vault-ui",r:"vault UI",s:"idle"},
+    {n:"optic-chart",r:"charts/viz",s:"idle"},
+    {n:"optic-motion",r:"animations",s:"idle"},
+    {n:"optic-a11y",r:"accessibility",s:"idle"},
+    {n:"optic-flow",r:"onboarding flow",s:"idle"}
+  ]},
+  { name:"INFRA / DEPLOY", agents:[
+    {n:"optic-infra",r:"infra lead",s:"idle"},
+    {n:"optic-docker",r:"containerization",s:"idle"},
+    {n:"optic-aws",r:"AWS prep",s:"idle"},
+    {n:"optic-deploy",r:"deployment",s:"idle"},
+    {n:"optic-monitor",r:"monitoring",s:"idle"}
+  ]},
+  { name:"QA / TESTING", agents:[
+    {n:"optic-test",r:"test lead",s:"idle"},
+    {n:"optic-break",r:"adversarial",s:"idle"},
+    {n:"optic-edge",r:"edge cases",s:"idle"},
+    {n:"optic-perf",r:"performance",s:"idle"},
+    {n:"optic-audit-qc",r:"audit quality",s:"idle"}
+  ]},
+  { name:"DOCS / COMMS", agents:[
+    {n:"optic-docs",r:"documentation",s:"idle"},
+    {n:"optic-readme",r:"README/docs",s:"idle"},
+    {n:"optic-notes",r:"release notes",s:"idle"},
+    {n:"optic-oracle",r:"hyperdoc keeper",s:"idle"}
+  ]},
+  { name:"GOD DEPARTMENT", agents:[
+    {n:"optic-god",r:"overseer",s:"idle"},
+    {n:"optic-cleric",r:"doctrine keeper",s:"idle"},
+    {n:"optic-desk",r:"support desk",s:"idle"},
+    {n:"optic-sage",r:"architect",s:"idle"},
+    {n:"optic-bolt",r:"speed builder",s:"idle"},
+    {n:"optic-nova",r:"innovation",s:"idle"},
+    {n:"optic-hawk",r:"security",s:"idle"},
+    {n:"optic-luna",r:"night watch",s:"idle"},
+    {n:"optic-zephyr",r:"cleanup",s:"idle"},
+    {n:"optic-turbo",r:"acceleration",s:"idle"},
+    {n:"optic-kyle",r:"drywall",s:"idle"},
+    {n:"optic-elias",r:"compliance",s:"idle"},
+    {n:"optic-doro",r:"archival",s:"idle"},
+    {n:"optic-clio",r:"history",s:"idle"},
+    {n:"optic-atlas",r:"mapping",s:"idle"},
+    {n:"optic-aria",r:"voice",s:"idle"},
+    {n:"optic-gorb",r:"consolidation",s:"idle"},
+    {n:"optic-kio",r:"kiosk",s:"idle"},
+    {n:"optic-pipe",r:"plumbing",s:"idle"},
+    {n:"optic-sophia",r:"wisdom",s:"idle"},
+    {n:"optic-lint",r:"code quality",s:"idle"},
+    {n:"optic-vault",r:"storage",s:"idle"},
+  ]}
+];
+
+let html = "";
+for (const d of depts) {
+  const done = d.agents.filter(a=>a.s==="done").length;
+  const active = d.agents.filter(a=>a.s==="working").length;
+  html += `<div class="dept">
+    <div class="dept-head">
+      <span class="dept-name">${d.name}</span>
+      <span class="dept-count">${d.agents.length} agents · ${done} done · ${active} active</span>
+    </div>`;
+  for (const a of d.agents) {
+    const sc = a.s==="working"?"working":a.s==="done"?"done":a.s==="failed"?"failed":"idle";
+    html += `<div class="agent-row">
+      <span class="agent-status ${sc}"></span>
+      <span class="agent-name">${a.n}</span>
+      <span class="agent-role">${a.r}</span>
+      ${a.t?`<span class="agent-task">${a.t}</span>`:""}
+    </div>`;
+  }
+  html += `</div>`;
+}
+document.getElementById("depts").innerHTML = html;
+</script>
+</body>
+</html>

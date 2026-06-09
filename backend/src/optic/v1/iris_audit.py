@@ -1,4 +1,10 @@
 """
+# DEPRECATED — never imported by the running ctxorg/server.py
+# Only referenced in optic/v1/server.py (not the active server).
+# Stage 13 (Iris context indexing) is pending — this will be wired when
+# indexing during audit is implemented.
+# DO NOT DELETE — keep as reference implementation for pipeline Stage 13.
+
 Optic V1 — Iris Audit Chat
 ===========================
 Conversational audit interface. Answers questions about a user's
@@ -34,6 +40,46 @@ Rules:
 - Keep responses 2-4 paragraphs. Use bullet lists for 3+ items.
 - Frame inferences as possibilities, not facts.
 - Never output raw JSON or database internals."""
+
+
+def _clean_iris_name(raw: str) -> str:
+    """Strip URL fragments, hex noise from workstream names."""
+    if not raw or not raw.strip():
+        return "Unknown"
+    raw = raw.strip()
+    _NOISE = {
+        "https", "http", "www", "com", "org", "net", "html", "json", "xml",
+        "css", "js", "abx", "xtcftw", "rspace", "pyasn1",
+        "screenshot", "screenshots", "temp", "untitled", "node_modules",
+        "desktop", "downloads", "inbox",
+        "io", "co", "dev", "app", "ai", "gov", "edu",
+        "copy", "backup", "final", "draft",
+    }
+    import re as _re
+    name = raw.replace("-", " ").replace("_", " ")
+    words = name.split()
+    meaningful = []
+    for w in words:
+        wl = w.lower()
+        if wl in _NOISE:
+            continue
+        if _re.fullmatch(r"[0-9a-f]{6,}", wl):
+            continue
+        if len(wl) >= 4 and not _re.search(r"[aeiouy]", wl) and not _re.search(r"\d", wl):
+            continue
+        meaningful.append(w)
+    if not meaningful:
+        return "Other"
+    cleaned = []
+    for w in meaningful:
+        if w.upper() in ("AI", "API", "AWS", "UI", "UX", "ML", "NLP", "GPU", "CPU", "RAM", "SSD"):
+            cleaned.append(w.upper())
+        elif len(w) <= 2:
+            cleaned.append(w.upper())
+        else:
+            cleaned.append(w[0].upper() + w[1:].lower() if len(w) > 1 else w.upper())
+    result = " ".join(cleaned).strip()
+    return result or "Other"
 
 
 class IrisAuditChat:
@@ -224,7 +270,7 @@ class IrisAuditChat:
                 meta = _json.loads(row["metadata"] or "{}")
             except Exception:
                 meta = {}
-            name = meta.get("workstream_name", "Unknown")
+            name = _clean_iris_name(meta.get("workstream_name", "Unknown"))
             if name not in groups:
                 groups[name] = {
                     "name": name,

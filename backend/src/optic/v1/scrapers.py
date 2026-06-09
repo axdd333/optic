@@ -1,3 +1,7 @@
+# DEPRECATED — never imported by the running ctxorg/server.py.
+# Only referenced in optic/v1/server.py (not the active server).
+# Source provider infrastructure for external data fetching.
+# DO NOT DELETE — keep as reference for future external source integration.
 from __future__ import annotations
 import hashlib
 import json
@@ -389,11 +393,296 @@ class WebsiteSnapshotProvider(SourceProvider):
         except Exception as e:
             result.errors.append(str(e))
         return result
-PROVIDERS: dict[str, type[SourceProvider]] = {
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Search Providers
+# ═══════════════════════════════════════════════════════════════════
+
+class SearchProvider(SourceProvider, ABC):
+    """Abstract base for search API adapters (Brave, SerpAPI, Tavily, etc.)."""
+
+    id = "search_base"
+    label = "Search provider"
+    required_env: tuple[str, ...] = ("SEARCH_API_KEY",)
+
+    def __init__(
+        self,
+        *args: Any,
+        api_key: str | None = None,
+        require_key: bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(*args, rate_limit_per_minute=10, **kwargs)
+        self.api_key = api_key
+        self.require_key = require_key
+
+    @abstractmethod
+    def search(self, query: str, *, num_results: int = 10) -> list[dict[str, Any]]:
+        """Execute search and return structured results.
+
+        Each result dict should have: title, url, snippet, and optional metadata.
+        """
+
+    def fetch(self, scope: dict[str, Any]) -> ParseResult:
+        """Scoped search: user-triggered, query-based, returns artifacts."""
+        result = ParseResult()
+        try:
+            self._require_user_triggered(scope)
+            self._require_keys(scope, ("query",))
+            query = str(scope["query"]).strip()
+            if not query:
+                raise ProviderError("query must be non-empty")
+            num = max(1, min(int(scope.get("num_results", 10)), 20))
+            items = self.search(query, num_results=num)
+            for item in items:
+                title = str(item.get("title", ""))[:300]
+                snippet = str(item.get("snippet", ""))[:2000]
+                url = str(item.get("url", ""))
+                meta = {
+                    "query": query,
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "is_public": True,
+                    "provider": self.id,
+                }
+                extra = item.get("metadata", {})
+                if isinstance(extra, dict):
+                    meta.update(extra)
+                result.artifacts.append(self._artifact(
+                    "search_result",
+                    json.dumps(item, sort_keys=True),
+                    meta,
+                    snippet or title,
+                ))
+        except Exception as e:
+            result.errors.append(str(e))
+        return result
+
+    def limits(self) -> dict[str, Any]:
+        return {"max_results": 20, "rate_per_minute": 10}
+
+    def ui_state(self) -> ProviderUIState:
+        has_key = bool(self.api_key)
+        if self.require_key and not has_key:
+            return ProviderUIState(
+                provider=self.id,
+                label=self.label,
+                enabled=False,
+                provider_missing=False,
+                missing_credentials=list(self.required_env),
+                reason=f"Missing API key(s): {', '.join(self.required_env)}. "
+                       f"Get one at the provider's developer portal.",
+                limits=self.limits(),
+            )
+        return ProviderUIState(
+            provider=self.id,
+            label=self.label,
+            enabled=True,
+            provider_missing=False,
+            missing_credentials=[],
+            reason="" if has_key else "Running without API key; some features limited.",
+            limits=self.limits(),
+        )
+
+
+class BraveSearchProvider(SearchProvider):
+    """Brave Search API adapter.
+
+    Requires BRAVE_SEARCH_API_KEY env var.
+    API docs: https://api.search.brave.com/app/documentation/web-search
+    """
+
+    id = "brave_search"
+    label = "Brave Search"
+    required_env = ("BRAVE_SEARCH_API_KEY",)
+
+    def __init__(self, *args: Any, api_key: str | None = None, **kwargs: Any):
+        key = api_key or os.getenv("BRAVE_SEARCH_API_KEY")
+        super().__init__(*args, api_key=key, require_key=bool(not key), **kwargs)
+
+    def limits(self) -> dict[str, Any]:
+        return {**super().limits(), "source": "Brave Search API", "free_tier": "2,000 queries/month"}
+
+    def search(self, query: str, *, num_results: int = 10) -> list[dict[str, Any]]:
+        if not self.api_key:
+            raise ProviderError("BRAVE_SEARCH_API_KEY not configured")
+        qs = urlencode({"q": query, "count": min(num_results, 20)})
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": self.api_key,
+        }
+        data, _ = self._http_get(
+            f"https://api.search.brave.com/res/v1/web/search?{qs}",
+            headers=headers,
+        )
+        parsed = json.loads(data.decode("utf-8", errors="replace"))
+        results: list[dict[str, Any]] = []
+        web = parsed.get("web", {}) if isinstance(parsed, dict) else {}
+        for r in (web.get("results") or [])[:num_results]:
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("description", ""),
+                "metadata": {
+                    "age": r.get("age", ""),
+                    "page_age": r.get("page_age", ""),
+                    "language": r.get("language", ""),
+                },
+            })
+        return results
+
+
+class SerpAPIProvider(SearchProvider):
+    """SerpAPI adapter for Google Search results.
+
+    Requires SERPAPI_KEY env var.
+    Docs: https://serpapi.com/
+    """
+
+    id = "serpapi"
+    label = "SerpAPI (Google)"
+    required_env = ("SERPAPI_KEY",)
+
+    def __init__(self, *args: Any, api_key: str | None = None, **kwargs: Any):
+        key = api_key or os.getenv("SERPAPI_KEY")
+        super().__init__(*args, api_key=key, require_key=bool(not key), **kwargs)
+
+    def limits(self) -> dict[str, Any]:
+        return {**super().limits(), "source": "SerpAPI", "free_tier": "100 searches/month"}
+
+    def search(self, query: str, *, num_results: int = 10) -> list[dict[str, Any]]:
+        if not self.api_key:
+            raise ProviderError("SERPAPI_KEY not configured")
+        params = urlencode({
+            "q": query,
+            "api_key": self.api_key,
+            "engine": "google",
+            "num": min(num_results, 20),
+            "output": "json",
+        })
+        data, _ = self._http_get(f"https://serpapi.com/search?{params}")
+        parsed = json.loads(data.decode("utf-8", errors="replace"))
+        results: list[dict[str, Any]] = []
+        organic = parsed.get("organic_results") if isinstance(parsed, dict) else []
+        for r in (organic or [])[:num_results]:
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("link", ""),
+                "snippet": r.get("snippet", ""),
+                "metadata": {
+                    "position": r.get("position"),
+                    "date": r.get("date", ""),
+                    "source": r.get("source", ""),
+                },
+            })
+        return results
+
+
+class TavilyProvider(SearchProvider):
+    """Tavily Search API adapter — AI-optimized search results.
+
+    Requires TAVILY_API_KEY env var.
+    Docs: https://docs.tavily.com/
+    """
+
+    id = "tavily"
+    label = "Tavily Search"
+    required_env = ("TAVILY_API_KEY",)
+
+    def __init__(self, *args: Any, api_key: str | None = None, **kwargs: Any):
+        key = api_key or os.getenv("TAVILY_API_KEY")
+        super().__init__(*args, api_key=key, require_key=bool(not key), **kwargs)
+
+    def limits(self) -> dict[str, Any]:
+        return {**super().limits(), "source": "Tavily API", "free_tier": "1,000 queries/month"}
+
+    def _http_post(
+        self,
+        url: str,
+        body: bytes,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[bytes, dict[str, str]]:
+        """POST variant of _http_get for APIs that require POST."""
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ProviderError("only absolute http(s) URLs are allowed")
+        self.rate_limiter.check(parsed.netloc.lower())
+        req_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        if headers:
+            req_headers.update(headers)
+        req = Request(url, data=body, headers=req_headers)
+        try:
+            with urlopen(req, timeout=self.timeout) as resp:
+                data = resp.read(MAX_FETCH_BYTES + 1)
+                if len(data) > MAX_FETCH_BYTES:
+                    raise ProviderError(f"response exceeds {MAX_FETCH_BYTES} bytes")
+                meta = {k.lower(): v for k, v in resp.headers.items()}
+                meta["status"] = str(resp.status)
+                meta["url"] = resp.geturl()
+                return data, meta
+        except HTTPError as e:
+            raise ProviderError(f"http {e.code}: {url}") from e
+        except URLError as e:
+            raise ProviderError(f"fetch failed: {e.reason}") from e
+
+    def search(self, query: str, *, num_results: int = 10) -> list[dict[str, Any]]:
+        if not self.api_key:
+            raise ProviderError("TAVILY_API_KEY not configured")
+        body = json.dumps({
+            "api_key": self.api_key,
+            "query": query,
+            "max_results": min(num_results, 20),
+            "search_depth": "basic",
+            "include_raw_content": False,
+        }).encode("utf-8")
+        data, _ = self._http_post(
+            "https://api.tavily.com/search",
+            body,
+            headers={"Content-Type": "application/json"},
+        )
+        parsed = json.loads(data.decode("utf-8", errors="replace"))
+        results: list[dict[str, Any]] = []
+        for r in (parsed.get("results") or [])[:num_results]:
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("content", ""),
+                "metadata": {
+                    "score": r.get("score"),
+                    "raw_content": r.get("raw_content", "")[:500] if r.get("raw_content") else "",
+                },
+            })
+        return results
+
+
+providers_by_id: dict[str, type[SourceProvider]] = {
     ManualURLProvider.id: ManualURLProvider,
     GitHubProvider.id: GitHubProvider,
     LocalFilesystemProvider.id: LocalFilesystemProvider,
     WebsiteSnapshotProvider.id: WebsiteSnapshotProvider,
+    BraveSearchProvider.id: BraveSearchProvider,
+    SerpAPIProvider.id: SerpAPIProvider,
+    TavilyProvider.id: TavilyProvider,
 }
+
+# Backward-compatible alias
+PROVIDERS = providers_by_id
+
+
 def provider_ui_states() -> list[dict[str, Any]]:
-    return [provider().ui_state().as_dict() for provider in PROVIDERS.values()]
+    """Return UI status for every registered provider, including disabled search providers."""
+    return [provider().ui_state().as_dict() for provider in providers_by_id.values()]
+
+
+def search_providers_ui() -> list[dict[str, Any]]:
+    """Return UI status for search-only providers."""
+    search_ids = {BraveSearchProvider.id, SerpAPIProvider.id, TavilyProvider.id}
+    return [
+        providers_by_id[pid]().ui_state().as_dict()
+        for pid in search_ids
+        if pid in providers_by_id
+    ]
