@@ -1586,6 +1586,18 @@ body::after {
   border-radius: 12px;
   background: rgba(255,255,255,0.76);
   padding: 11px 12px;
+  box-shadow: var(--glass-shadow);
+  transition: border-color .18s var(--ease), background .18s var(--ease),
+              box-shadow .18s var(--ease), transform .18s var(--ease);
+}
+.route-kpis > div:hover {
+  border-color: rgba(13,42,108,.14);
+  background: rgba(255,255,255,.92);
+  box-shadow:
+    0 8px 20px rgba(15,33,76,.07),
+    0 2px 6px rgba(0,0,0,.03),
+    var(--glass-inset);
+  transform: translateY(-1px);
 }
 
 .route-kpis span {
@@ -1615,12 +1627,17 @@ body::after {
   border-radius: 9px;
   background: rgba(255,255,255,0.8);
   color: var(--muted);
+  transition: border-color .15s var(--ease), color .15s var(--ease),
+              background .15s var(--ease), box-shadow .15s var(--ease),
+              transform .15s var(--ease);
 }
 
 .route-btn:hover,
 .route-cta:hover {
   border-color: var(--line-hi);
   color: var(--text);
+  box-shadow: 0 4px 10px rgba(0,0,0,.04);
+  transform: translateY(-1px);
 }
 .route-btn:active,
 .route-cta:active {
@@ -1646,6 +1663,26 @@ body::after {
   border-radius: 14px;
   background: rgba(255,255,255,0.84);
   padding: 12px 13px;
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  transition: border-color .20s var(--ease), background .20s var(--ease),
+              box-shadow .20s var(--ease), transform .20s var(--ease);
+  cursor: default;
+}
+.route-card:hover {
+  border-color: rgba(13,42,108,.18);
+  background: rgba(255,255,255,.95);
+  box-shadow:
+    0 14px 32px rgba(15,33,76,.10),
+    0 3px 10px rgba(0,0,0,.05),
+    0 0 0 1px rgba(var(--accent-rgb),.05),
+    var(--glass-inset);
+  transform: translateY(-2px);
+}
+.route-card:active {
+  transform: translateY(-1px) scale(0.988);
+  transition: transform .08s var(--ease);
 }
 
 .route-card h3 {
@@ -1666,6 +1703,25 @@ body::after {
   background: rgba(255,255,255,0.84);
   display: grid;
   gap: 8px;
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  transition: border-color .18s var(--ease), background .18s var(--ease),
+              box-shadow .18s var(--ease), transform .18s var(--ease);
+  cursor: default;
+}
+.route-mini-card:hover {
+  border-color: rgba(13,42,108,.16);
+  background: rgba(255,255,255,.96);
+  box-shadow:
+    0 10px 24px rgba(15,33,76,.08),
+    0 2px 8px rgba(0,0,0,.04),
+    var(--glass-inset);
+  transform: translateY(-1.5px);
+}
+.route-mini-card:active {
+  transform: translateY(-0.5px) scale(0.99);
+  transition: transform .08s var(--ease);
 }
 
 .route-mini-card h3 {
@@ -1813,14 +1869,17 @@ body::after {
   border-radius: 9px;
   color: var(--muted);
   background: rgba(255,255,255,.72);
-  transition: border-color .12s, color .12s, background .12s;
+  transition: border-color .12s, color .12s, background .12s, transform .12s;
 }
-
 .ws-view-btn:hover {
   border-color: var(--line-hi);
   color: var(--text);
+  transform: translateY(-1px);
 }
-
+.ws-view-btn:active {
+  transform: translateY(0) scale(0.93);
+  transition: transform .08s var(--ease);
+}
 .ws-view-btn.active {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb),.36);
@@ -1838,16 +1897,24 @@ body::after {
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: all .12s;
+  transition: all .15s var(--ease);
   flex-shrink: 0;
 }
-.cluster-tab:hover { border-color: var(--line-hi); color: var(--text); }
+.cluster-tab:hover { border-color: var(--line-hi); color: var(--text); transform: translateY(-1px); }
+.cluster-tab:active {
+  transform: translateY(0) scale(0.96);
+  transition: transform .08s var(--ease);
+}
 .cluster-tab.active {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(var(--accent-rgb),.3);
+}
+.cluster-tab.active:hover {
+  opacity: .9;
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb),.38);
 }
 
 /* ─── Cards grid ─────────────────────────────────────────────────────────── */
@@ -1906,11 +1973,11 @@ body::after {
 
 /* ─── Skeleton loading states (white frost‑glass cards) ─────────────────── */
 @keyframes skeletonPulse {
-  0%, 100% { opacity: .3; }
-  50% { opacity: .55; }
+  0%, 100% { opacity: .25; }
+  50% { opacity: .5; }
 }
 .skeleton-pulse {
-  animation: skeletonPulse 1.8s ease-in-out infinite;
+  animation: skeletonPulse 2s cubic-bezier(.4,0,.6,1) infinite;
 }
 
 /* ─── Shimmer sweep (polished frost-glass skeleton overlay) ─────────────── */
@@ -1936,9 +2003,8 @@ body::after {
     rgba(255,255,255,0.28) 50%,
     transparent 64%
   );
-  animation: skeletonShimmer 2s ease-in-out infinite;
+  animation: skeletonShimmer 2.2s cubic-bezier(.45,0,.25,1) infinite;
 }
-
 /* Minimal skeleton block — used in rail skeletons and other compact contexts */
 .skeleton-block {
   background: rgba(0,0,0,.055);
@@ -2216,6 +2282,13 @@ body::after {
   gap: 7px;
   position: relative;
   z-index: 1;
+  transition: background .22s var(--ease), border-color .22s var(--ease),
+              box-shadow .22s var(--ease);
+}
+.ws-card2:hover .ws-evidence-block {
+  background: rgba(var(--accent-rgb),.06);
+  border-color: rgba(var(--accent-rgb),.10);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.5);
 }
 
 .ws-evidence-label {
@@ -2390,11 +2463,29 @@ body::after {
   font-size: 12.5px;
   color: var(--muted);
   background: rgba(255,255,255,.5);
-  transition: border-color .12s, color .12s, background .12s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.02);
+  transition: border-color .15s var(--ease), color .15s var(--ease),
+              background .15s var(--ease), box-shadow .15s var(--ease),
+              transform .15s var(--ease);
+}
+.folder-check:hover {
+  border-color: var(--line-hi);
+  color: var(--text);
+  background: rgba(255,255,255,.78);
+  box-shadow: 0 3px 8px rgba(0,0,0,.04);
+  transform: translateY(-1px);
+}
+.folder-check:active {
+  transform: translateY(0) scale(0.97);
+  transition: transform .08s var(--ease);
 }
 .folder-check input { display: none; }
-.folder-check.checked { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
-.folder-check:hover { border-color: var(--line-hi); color: var(--text); }
+.folder-check.checked {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb),.12);
+}
 .scan-btn {
   width: 240px; height: 40px;
   border: 0; border-radius: var(--r-md);
@@ -5085,13 +5176,42 @@ body::after {
   }
 }
 
-/* Motion reduction — consolidated */
+/* Motion reduction — comprehensive overrides */
 @media (prefers-reduced-motion: reduce) {
+  /* Disable all CSS animations */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* Freeze reveal animation */
   .reveal { opacity:1; animation:none; transform:none; filter:none; }
-  .onb-overlay, .onb-card, .settings-overlay, .audience-modal-overlay { animation: none; }
+
+  /* Freeze cardIn stagger */
+  .ws-card2 { animation: none; opacity: 1; transform: none; }
+
+  /* Disable skeleton shimmer overlay (remove pseudo-element) */
   .skeleton-shimmer::after { animation: none; display: none; }
+  .skeleton-pulse { animation: none; }
+
+  /* Disable canvas transition blur */
   .canvas-transition-overlay { transition: none; }
   .canvas-transition-overlay.active { opacity: 0; backdrop-filter: none; }
+
+  /* Freeze onboarding + modal animations */
+  .onb-overlay, .onb-card, .settings-overlay, .audience-modal-overlay { animation: none; }
+
+  /* Disable pulse dot */
+  .pulse-dot { animation: none; }
+
+  /* Freeze blink cursor */
+  .iris-cursor { animation: none; opacity: 0; }
+
+  /* Keep scroll behaviour smooth but instant */
+  html { scroll-behavior: auto; }
 }
 
 

@@ -19,9 +19,13 @@ export OPTIC_PORT="${OPTIC_PORT:-3003}"
 export OPTIC_DATA_DIR="${OPTIC_DATA_DIR:-$HOME/.optic}"
 export OPTIC_DB_PATH="${OPTIC_DB_PATH:-$OPTIC_DATA_DIR/v1.db}"
 
-# ── LLM inference (optional — iris chat uses DeepSeek if key is provided) ──
-export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-ef42d79c0ff64ba9bd21c011638397f6}"
+# ── LLM inference (opt-in only — explicitly set DEEPSEEK_API_KEY to enable) ──
+# DeepSeek is OPT-IN per Invariant #12 (Local-First By Default).
+# The system runs fully offline with Ollama (local) or deterministic fallback.
+# To opt in: export DEEPSEEK_API_KEY="sk-your-key"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}"
 export DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-chat}"
+export DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}"
 
 # ── Python setup ────────────────────────────────────────────────────────────
 PYTHON="${OPTIC_PYTHON:-python3}"

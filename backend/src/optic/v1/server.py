@@ -12,9 +12,11 @@
 # resolver/scrapers integration, DeepSeek API config) are UNREACHABLE from the
 # running server. They live in a parallel runtime universe.
 #
-# CLOUD-FIRST VIOLATION: Lines 80-82 configure DeepSeek API (remote LLM) which
-# violates Invariant #12 (Local-First By Default). The running server uses Ollama
-# (local) via ctxorg/ollama.py.
+# CLOUD-FIRST VIOLATION (Heresy 7 — FIXED): Lines 109-112 configure DeepSeek API
+# (remote LLM) which would violate Invariant #12 (Local-First By Default) if
+# defaulted to an active key. The env var now defaults to empty string, making
+# DeepSeek strictly opt-in. The running server uses Ollama (local) via
+# iris_audit.py fallback chain: DeepSeek (opt-in) → Ollama (local) → deterministic.
 #
 # DO NOT DELETE — keep as reference for: init_db(), _migrate_v1_schema(),
 # _generate_repairs(). The rest may be cannibalized into ctxorg/server.py
@@ -60,6 +62,7 @@ from .lenses import AUDIENCE_LENSES
 from .contradiction import ContradictionEngine
 from .inference import InferenceCardGenerator
 from . import graph, iris_audit, parsers, resolver, scrapers
+from .risk import risk_engine
 
 # ── Signal detector imports ──────────────────────────────────────
 try:
@@ -109,7 +112,7 @@ _iris_summary_jobs: set[str] = set()  # tracks in-flight generation
 # ── LLM config ────────────────────────────────────────────────────
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 
 
 app = FastAPI(title="Optic V1", version="0.1.0")
@@ -2932,21 +2935,80 @@ async def run_audit(mode: str, token: str = ""):
     conn.commit()
 
     # Stage 9-10: Generate risks and repairs
-    risks = [
-        RiskFlag(category=RiskCategory.STALE_CONTEXT, description="Some workstreams may contain stale files",
-                 severity=Severity.LOW, audience_affected=["recruiter", "investor"]),
-        RiskFlag(category=RiskCategory.NARRATIVE_FRAGMENTATION, description="Workstreams span multiple unrelated topics",
-                 severity=Severity.MEDIUM, audience_affected=["all"]),
-        RiskFlag(category=RiskCategory.MISSING_PROOF, description="Some projects lack public documentation",
-                 severity=Severity.LOW, audience_affected=["recruiter", "investor"]),
-    ]
+    # Dynamic risk generation via risk_engine — all risks are evidence-backed
+    # from contradictions, claim confidence, artifact staleness, and workstream
+    # fragmentation.  No hardcoded fallback risks — even failure paths call
+    # risk_engine() with whatever data is available.  Mirrors ctxorg/server.py
+    # lines 10155-10204.
+
+    # Re-read contradictions, claims, and artifacts from DB so we have
+    # consistent dicts with all columns risk_engine inspects.
+    try:
+        all_contra_rows = conn.execute(
+            "SELECT * FROM contradictions ORDER BY created_at DESC LIMIT 50"
+        ).fetchall()
+        all_claim_rows_risk = conn.execute(
+            "SELECT * FROM claims"
+        ).fetchall()
+        all_artifact_rows_risk = conn.execute(
+            "SELECT * FROM artifacts"
+        ).fetchall()
+
+        # ── Convert rows to dicts with JSON field parsing ──
+        contra_dicts: list[dict] = []
+        for r in all_contra_rows:
+            d = dict(r)
+            for jf in ("claim_ids", "artifact_ids", "audience_affected"):
+                if jf in d and isinstance(d[jf], str):
+                    try:
+                        d[jf] = json.loads(d[jf])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            contra_dicts.append(d)
+
+        claim_dicts: list[dict] = [_row_to_dict(r) for r in all_claim_rows_risk]
+
+        artifact_dicts: list[dict] = []
+        for r in all_artifact_rows_risk:
+            d = dict(r)
+            if "metadata" in d and isinstance(d["metadata"], str):
+                try:
+                    d["metadata"] = json.loads(d["metadata"])
+                except (json.JSONDecodeError, TypeError):
+                    d["metadata"] = {}
+            artifact_dicts.append(d)
+    except Exception as exc:
+        logger.exception("risk_engine DB read failed, using empty data: %s", exc)
+        contra_dicts, claim_dicts, artifact_dicts = [], [], []
+
+    try:
+        risks = risk_engine(
+            contradictions=contra_dicts,
+            claims=claim_dicts,
+            artifacts=artifact_dicts,
+            workstream_cards=workstreams,
+            now_iso=now,
+        )
+    except Exception as exc:
+        logger.exception("risk_engine call failed, falling back to empty inputs: %s", exc)
+        risks = risk_engine(
+            contradictions=[],
+            claims=[],
+            artifacts=[],
+            workstream_cards=workstreams,
+            now_iso=now,
+        )
+
     for r in risks:
         conn.execute(
             "INSERT OR REPLACE INTO risks(id, category, description, severity, "
             "linked_claim_ids, linked_artifact_ids, audience_affected, created_at) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            (str(r.id), r.category.value, r.description, r.severity.value,
-             json.dumps([]), json.dumps([]), json.dumps(r.audience_affected), now)
+            (str(r.id), r.category.value, r.description[:300], r.severity.value,
+             json.dumps([str(x) for x in r.linked_claim_ids]),
+             json.dumps([str(x) for x in r.linked_artifact_ids]),
+             json.dumps(r.audience_affected if isinstance(r.audience_affected, list) else []),
+             r.created_at)
         )
         # Populate junction tables for FK enforcement
         for cid in r.linked_claim_ids:
@@ -3783,6 +3845,67 @@ async def ctx_rename(token: str = ""):
 @app.post("/api/embed/run")
 async def ctx_embed():
     return {"status": "started"}
+
+# ── swarm ──────────────────────────────────────────────────────────
+
+@app.get("/api/swarm/entities")
+async def swarm_entities():
+    """Return all registered Optic entities with types, roles, and statuses."""
+    profiles_dir = Path(os.path.expanduser("~/.hermes/profiles"))
+    entities = []
+    import re
+    for profile_path in sorted(profiles_dir.glob("optic-*")):
+        if not profile_path.is_dir():
+            continue
+        config_file = profile_path / "config.yaml"
+        name = profile_path.name
+        entity_type = "agent"
+        role = "unknown"
+        desc = ""
+        if config_file.exists():
+            try:
+                raw = config_file.read_text()
+                m = re.search(r'entity_type:\s*(\S+)', raw)
+                if m: entity_type = m.group(1)
+                m = re.search(r'role:\s*(.+)', raw)
+                if m: role = m.group(1).strip()
+                m = re.search(r'description:\s*(.+)', raw)
+                if m: desc = m.group(1).strip()
+            except Exception:
+                pass
+        entities.append({
+            "name": name,
+            "entity_type": entity_type,
+            "role": role,
+            "description": desc,
+        })
+    
+    # Add active cron workers
+    cron_dir = Path(os.path.expanduser("~/.hermes/profiles/optic-god/cron"))
+    active_crons = []
+    if cron_dir.exists():
+        for f in cron_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+                if data.get("enabled"):
+                    active_crons.append(data.get("name", f.stem))
+            except Exception:
+                pass
+    
+    summary = {
+        "total": len(entities),
+        "by_type": {},
+        "active_cron_workers": len(active_crons),
+        "active_cron_names": active_crons,
+        "server_port": 8787,
+        "status": "operational"
+    }
+    for e in entities:
+        t = e.get("entity_type", "unknown")
+        summary["by_type"][t] = summary["by_type"].get(t, 0) + 1
+    
+    return {"entities": entities, "summary": summary}
+
 
 @app.get("/api/health")
 async def ctx_health():

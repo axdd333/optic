@@ -8494,7 +8494,7 @@ class OnboardingMode {
         const ad = await getJson("/api/v1/status");
         this.claimCount = ad.claim_count || ad.claims || 0;
         this.riskCount = ad.risk_count || ad.risks || 0;
-        this.repairCount = ad.repair_count || ad.repairs || 0;
+        this.repairCount = ad.repair_count || ad.pending_repairs || 0;
         this.progressMsg = `Claims: ${this.claimCount}  ·  Risks: ${this.riskCount}  ·  Repairs: ${this.repairCount}`;
         if (this.claimCount > 0 || (ad.status === "complete" || ad.status === "idle")) {
           if (ad.status === "running") continue; // still running
@@ -8615,8 +8615,8 @@ class OnboardingMode {
   _renderScope() {
     const home = state.homeData?.home || "~";
     const fileCount = state.homeData?.source_count || 0;
-    const wsCount = state.homeData?.workstream_count || 0;
-    const expCount = state.homeData?.exposure_count || 0;
+    const wsCount = state.homeData?.workstreams_count || 0;
+    const expCount = state.homeData?.exposures || 0;
     const narratives = (state.homeData?.narratives || []).slice(0, 4);
     return `<h2 class="onb-heading">What Optic found</h2>
       <p class="onb-desc">From your local filesystem at <code>${esc(home)}</code>:</p>
@@ -8686,8 +8686,8 @@ class OnboardingMode {
     ];
     const radios = modes.map(m => {
       const sel = this.auditMode === m.id ? "checked" : "";
-      return `<label class="onb-check onb-check-mode ${sel ? "onb-check-sel" : ""}">
-        <input type="radio" name="auditMode" data-onb="set-mode" data-mode="${m.id}" ${sel}>
+      return `<label class="onb-check onb-check-mode ${sel ? "onb-check-sel" : ""}" data-onb="set-mode" data-mode="${m.id}">
+        <input type="radio" name="auditMode" ${sel}>
         <span class="onb-check-body"><strong>${m.label}</strong><span class="onb-meta">${m.desc}</span></span>
       </label>`;
     }).join("");

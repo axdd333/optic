@@ -34,7 +34,7 @@ Then open **http://localhost:8787** in your browser.
 | HTTP Server | Python `ThreadingHTTPServer` (stdlib) + FastAPI |
 | Default Port | **8787** |
 | Database | SQLite (`~/.optic/v1.db`) |
-| LLM / Iris Chat | **DeepSeek** (`deepseek-chat`) |
+| LLM / Iris Chat | **Ollama local-first** (DeepSeek opt-in) |
 | Frontend | Vanilla JS SPA (single `app.js`, ~8700 lines) + `app.css` |
 | Graph | D3.js + Three.js (force-directed topology + 3D universe) |
 | Deployment | Docker Compose ready |
@@ -71,7 +71,8 @@ Self-contained alternative that creates a Python virtual environment, installs d
 
 ```bash
 ./scripts/start.sh
-# Env overrides: OPTIC_PORT, OPTIC_HOST, OPTIC_DATA_DIR, DEEPSEEK_API_KEY
+# Env overrides: OPTIC_PORT, OPTIC_HOST, OPTIC_DATA_DIR
+# For optional cloud LLM (opt-in): DEEPSEEK_API_KEY
 OPTIC_PORT=8080 ./scripts/start.sh
 ```
 
@@ -158,7 +159,7 @@ All agents are hyperdoc-driven: the build contract at `docs/optichyperdoc.rtf` d
 | Route | Description |
 |--------|-------------|
 | `/api/scan` | Trigger filesystem scan |
-| `/api/iris` | Streaming Iris chat (DeepSeek) |
+| `/api/iris` | Streaming Iris chat (local Ollama, DeepSeek opt-in) |
 | `/api/chat` | Non-streaming chat |
 | `/api/signup`, `/api/signin`, `/api/signout` | Local auth |
 | `/api/settings` | Update settings |
@@ -236,8 +237,9 @@ backend/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEEPSEEK_API_KEY` | Built-in key | DeepSeek API key for Iris chat |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | Model to use for Iris |
+| `DEEPSEEK_API_KEY` | (none) | DeepSeek API key (opt-in — system works fully offline without it) |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | Model for DeepSeek (only used if `DEEPSEEK_API_KEY` is set) |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | DeepSeek API base URL (only used if `DEEPSEEK_API_KEY` is set) |
 | `OPTIC_PORT` | `8787` | Server port |
 | `OPTIC_HOST` | `127.0.0.1` | Bind address |
 | `OPTIC_DATA_DIR` | `~/.optic` | Database and state directory |

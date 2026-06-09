@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 PORT="${1:-3005}"
-export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-ef42d79c0ff64ba9bd21c011638397f6}"
 
 # ── Kill old instances ─────────────────────────────────────────────
 echo "Optic: cleaning old processes..."

@@ -1140,6 +1140,8 @@ def route(req: BaseHTTPRequestHandler, cfg: dict) -> None:
         return send(req, audience_list_payload())
     if path == "/api/v1/audit/general":
         return send(req, v1_audit_general_payload(req, cfg))
+    if path == "/api/v1/graph/evidence":
+        return send(req, v1_graph_evidence_payload(req, cfg))
     if path.startswith("/api/"):
         return send_err(req, "not_found", code=404)
     return send_err(req, "not_found", code=404)
@@ -1679,13 +1681,25 @@ def workstreams_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
                                              gemma_budget=0)
         except Exception:
             _log_ev("ws_compute_failed", run=run)
-            return {"run": run, "workstreams": [], "cached": False}
+            fast_cards = []
+
+        # ── V1 fallback: when scanner DB is empty, derive from V1 signals ──
+        v1_fallback_used = False
+        if not fast_cards and _V1_AVAILABLE:
+            fast_cards = _v1_workstreams_fallback()
+            v1_fallback_used = True
+
         with _ws_lock:
             _ws_cache[run]["cards"] = fast_cards
-        # Start background Gemma naming pass
-        threading.Thread(
-            target=_ws_compute_bg, args=(cfg, run), daemon=True
-        ).start()
+            if v1_fallback_used:
+                _ws_cache[run]["ready"] = True  # V1 names are already final
+
+        # Only start background Gemma naming if we have scanner-derived cards
+        # (V1 fallback cards already have good names from signal metadata)
+        if fast_cards and not v1_fallback_used:
+            threading.Thread(
+                target=_ws_compute_bg, args=(cfg, run), daemon=True
+            ).start()
         return {"run": run, "workstreams": fast_cards, "cached": False}
 
     # Cache exists but not ready yet (Gemma still computing) → serve fast cards
@@ -5307,6 +5321,13 @@ def home_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
     file_count = int(stat[0]["c"] if stat else 0)
     total_size = int(stat[0]["s"] if stat else 0)
     ws = _load_ws(cfg, run)
+
+    # ── V1 fallback for file_count when scanner DB is empty ──
+    if file_count == 0 and _V1_AVAILABLE:
+        v1_total = _v1_total_file_count()
+        if v1_total > 0:
+            file_count = v1_total
+
     graph = read_graph(cfg, run)
     nodes = list(graph.get("nodes", []))
     signal_count = len(nodes) if nodes else file_count
@@ -5518,11 +5539,18 @@ def _load_ws(cfg: dict, run: str, allow_compute: bool = True) -> list[dict]:
             conn, cfg, run_id=run, limit=30, gemma_budget=0
         )
     except Exception:
-        return []
+        cards = []
+
+    # ── V1 fallback when scanner DB returns empty ──
+    if not cards and _V1_AVAILABLE:
+        cards = _v1_workstreams_fallback()
+
     with _ws_lock:
         cur = _ws_cache.setdefault(run, {"cards": [], "ready": False})
         if not cur.get("cards"):
             cur["cards"] = list(cards)
+        if cards and not cur.get("ready"):
+            cur["ready"] = True  # V1 cards don't need Gemma
     return cards
 
 
@@ -9173,6 +9201,147 @@ def _v1_open_db_rw():
     return conn
 
 
+def _v1_workstreams_fallback() -> list[dict]:
+    """Build workstream cards from V1 DB signals when scanner DB is empty.
+
+    Reads the signals table (metadata JSON with workstream_id, workstream_name,
+    confidence, file_count, topics, evidence_labels) and returns workstream
+    card dicts in the same shape as workstreams.compute().
+    """
+    import sqlite3
+    import json as _json
+
+    db_path = _V1_DB
+    if not db_path.exists():
+        db_path = Path("/Users/ahmedm/.optic/v1.db")
+    if not db_path.exists():
+        return []
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+    except Exception:
+        return []
+
+    try:
+        # Get all topic_focus signals (one per workstream, best metadata)
+        rows = conn.execute(
+            "SELECT metadata FROM signals WHERE category='topic_focus' ORDER BY id"
+        ).fetchall()
+
+        cards = []
+        for row in rows:
+            meta_str = row["metadata"]
+            if not meta_str:
+                continue
+            try:
+                meta = _json.loads(meta_str)
+            except _json.JSONDecodeError:
+                continue
+
+            ws_id = str(meta.get("workstream_id", ""))
+            if not ws_id:
+                continue
+            ws_name = str(meta.get("workstream_name", ws_id))
+            confidence = float(meta.get("confidence", 0.5))
+            file_count = int(meta.get("file_count", 0))
+            topics_raw = meta.get("topics", [])
+            if isinstance(topics_raw, str):
+                topics_raw = [topics_raw]
+            topics_raw = [str(t) for t in topics_raw]
+            evidence_labels = meta.get("evidence_labels", [])
+            if isinstance(evidence_labels, str):
+                evidence_labels = [evidence_labels]
+
+            # Derive type breakdown from topics
+            breakdown = {"screenshots": 0, "documents": 0, "code": 0,
+                         "media": 0, "other": 0}
+            topic_str = " ".join(t.lower() for t in topics_raw)
+            if "code" in topic_str and "writing" in topic_str:
+                breakdown["code"] = int(file_count * 0.5)
+                breakdown["documents"] = int(file_count * 0.5)
+            elif "code" in topic_str:
+                breakdown["code"] = int(file_count * 0.7)
+                breakdown["documents"] = int(file_count * 0.3)
+            elif "writing" in topic_str:
+                breakdown["documents"] = int(file_count * 0.7)
+                breakdown["code"] = int(file_count * 0.3)
+            else:
+                breakdown["other"] = file_count
+
+            # Color from dominant type
+            dominant = max(breakdown, key=lambda k: breakdown[k])
+            color = {
+                "screenshots": "teal", "media": "coral",
+                "documents": "blue", "code": "amber", "other": "gray",
+            }.get(dominant, "purple")
+
+            # Use evidence labels as key_files
+            key_files = [str(lbl) for lbl in evidence_labels[:5]]
+
+            # Summary
+            summary = (
+                f"{file_count} files in '{ws_name}' — "
+                f"{', '.join(topics_raw[:3])}."
+            )
+
+            cards.append({
+                "id": ws_id,
+                "name": ws_name,
+                "file_count": file_count,
+                "type_breakdown": breakdown,
+                "folders": [ws_name],
+                "key_files": key_files,
+                "topics": topics_raw,
+                "summary": summary,
+                "confidence": confidence,
+                "color": color,
+            })
+
+        # Sort by confidence * log(file_count) descending (same as compute())
+        import math as _math
+        cards.sort(
+            key=lambda c: c["confidence"] * _math.log2(min(c["file_count"], 150) + 1),
+            reverse=True,
+        )
+        return cards
+    finally:
+        conn.close()
+
+
+def _v1_total_file_count() -> int:
+    """Return total file count summed from V1 DB signal metadata."""
+    import sqlite3
+    import json as _json
+
+    db_path = _V1_DB
+    if not db_path.exists():
+        db_path = Path("/Users/ahmedm/.optic/v1.db")
+    if not db_path.exists():
+        return 0
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+    except Exception:
+        return 0
+
+    try:
+        rows = conn.execute(
+            "SELECT metadata FROM signals WHERE category='topic_focus'"
+        ).fetchall()
+        total = 0
+        for row in rows:
+            try:
+                meta = _json.loads(row["metadata"] or "{}")
+                total += int(meta.get("file_count", 0))
+            except (_json.JSONDecodeError, ValueError, TypeError):
+                pass
+        return total
+    finally:
+        conn.close()
+
+
 def _v1_init_db():
     """Create the V1 SQLite database and tables if they don't exist.
     Mirrors the schema from optic.v1.server.init_db() so ctxorg can
@@ -10269,6 +10438,302 @@ def v1_repairs_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
         return {"repairs": repairs, "count": len(repairs)}
     except Exception as exc:
         return {"repairs": [], "count": 0, "error": str(exc)}
+
+
+def v1_graph_evidence_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """GET /api/v1/graph/evidence — returns the complete evidence graph with typed nodes and edges.
+
+    Instantiates EvidenceGraph from optic.v1.graph and populates it from the V1
+    database: claims, contradictions, risks, repairs, signals, artifacts, and
+    audience lenses.  Returns JSON-compatible nodes and edges lists.
+    """
+    if not _V1_AVAILABLE:
+        return {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0,
+                "note": "V1 database not found. Run a scan and audit to populate."}
+    try:
+        from optic.v1.graph import EvidenceGraph  # type: ignore
+        import json as _json
+
+        conn = _v1_open_db()
+        eg = EvidenceGraph()
+
+        # ── User root node ──────────────────────────────────────
+        user_id = "local-user"
+        eg.add_node("user", user_id, label="Optic user",
+                    data={"local_mode": True})
+
+        # ── Audience lens nodes ──────────────────────────────────
+        audience_ids: dict[str, str] = {}
+        known_lenses = [
+            "recruiter", "investor", "cofounder", "journalist",
+            "regulator", "auditor", "general_public", "close_friend",
+            "manager", "peer", "family", "student", "client", "mentor",
+        ]
+        for lens_id in known_lenses:
+            label = lens_id.replace("_", " ").title()
+            aid = f"audience:{lens_id}"
+            eg.add_node("audience", aid, label=label)
+            audience_ids[lens_id] = aid
+
+        # Add any extra lenses found in claims
+        for row in conn.execute(
+            "SELECT DISTINCT audience_lens FROM claims WHERE audience_lens IS NOT NULL"
+        ).fetchall():
+            lens_id = row["audience_lens"]
+            if lens_id and lens_id not in audience_ids:
+                aid = f"audience:{lens_id}"
+                eg.add_node("audience", aid,
+                            label=lens_id.replace("_", " ").title())
+                audience_ids[lens_id] = aid
+
+        # ── Workstream / source nodes ────────────────────────────
+        # Derive workstream clusters from signal metadata
+        workstream_clusters: dict[str, dict] = {}
+        sig_rows = conn.execute(
+            "SELECT metadata FROM signals WHERE metadata IS NOT NULL AND metadata != '{}' LIMIT 200"
+        ).fetchall()
+        for row in sig_rows:
+            try:
+                meta = _json.loads(row["metadata"] or "{}")
+                ws_id = meta.get("workstream_id") or meta.get("source_id") or ""
+                ws_name = meta.get("workstream_name") or meta.get("workstream") or ws_id
+                if ws_id and ws_id not in workstream_clusters:
+                    workstream_clusters[ws_id] = {
+                        "id": ws_id,
+                        "name": ws_name,
+                        "confidence": float(meta.get("confidence", 0.5)),
+                        "file_count": int(meta.get("file_count", 0)),
+                        "topics": meta.get("topics", []),
+                    }
+            except Exception:
+                pass
+        for ws in workstream_clusters.values():
+            ws_id = ws.get("id", "")
+            if not ws_id:
+                continue
+            eg.add_node("document", ws_id,
+                        label=ws.get("name", "Unknown"),
+                        data={"confidence": ws.get("confidence"),
+                              "file_count": ws.get("file_count"),
+                              "topics": ws.get("topics", [])})
+            eg.add_edge("derived_from", ws_id, user_id,
+                        data={"type": "workstream"})
+
+        # ── Claim nodes + evidence edges ─────────────────────────
+        claims_rows = conn.execute(
+            "SELECT * FROM claims ORDER BY generated_at DESC LIMIT 500"
+        ).fetchall()
+        for row in claims_rows:
+            cid = row["id"]
+            audience = row["audience_lens"] or "general"
+            confidence = row["confidence_band"] or "low"
+            eg.add_node("claim", cid,
+                        label=row["title"] or (row["claim"] or "")[:80],
+                        data={
+                            "claim": row["claim"],
+                            "audience_lens": audience,
+                            "confidence_band": confidence,
+                            "severity": row["severity"],
+                            "evidence_count": row["evidence_count"],
+                            "not_a_verdict": bool(int(row["not_a_verdict"] or "1")),
+                        })
+            # claim → audience
+            if audience in audience_ids:
+                eg.add_edge("visible_to", cid, audience_ids[audience])
+
+            # Supporting evidence
+            try:
+                supporting = _json.loads(row["supporting_evidence"] or "[]")
+            except Exception:
+                supporting = []
+            for ev in supporting:
+                # Use raw artifact UUID — connects to real artifact nodes from DB
+                eg.merge_node("artifact", ev,
+                              label=str(ev)[:60],
+                              data={"evidence_role": "supporting"},
+                              provenance=audience)
+                eg.add_edge("supports", ev, cid, weight=0.8)
+
+            # Weakening evidence
+            try:
+                weakening = _json.loads(row["weakening_evidence"] or "[]")
+            except Exception:
+                weakening = []
+            for ev in weakening:
+                eg.merge_node("artifact", ev,
+                              label=str(ev)[:60],
+                              data={"evidence_role": "weakening"},
+                              provenance=audience)
+                eg.add_edge("weakens", ev, cid, weight=0.4)
+
+            # Source gaps
+            try:
+                gaps = _json.loads(row["source_gaps"] or "[]")
+            except Exception:
+                gaps = []
+            for gap in gaps:
+                gap_id = f"source_gap:{gap}"
+                eg.merge_node("source_gap", gap_id,
+                              label=str(gap)[:80],
+                              provenance=audience)
+                eg.add_edge("missing_context_for", gap_id, cid)
+
+        # ── Real artifact nodes from DB ──────────────────────────
+        artifact_rows = conn.execute(
+            "SELECT * FROM artifacts LIMIT 1000"
+        ).fetchall()
+        node_type_map = {
+            "file": "artifact", "text": "document", "code": "document",
+            "html": "document", "csv": "document", "image": "image",
+            "pdf": "document", "url": "document",
+        }
+        for row in artifact_rows:
+            aid = row["id"]
+            artifact_type = (row["type"] if "type" in row.keys() else "file")
+            ntype = node_type_map.get(artifact_type, "artifact")
+            fpath = (row["encrypted_path"] if "encrypted_path" in row.keys() else "") or (
+                (row["content_preview"] if "content_preview" in row.keys() else "") or "")[:80]
+            eg.merge_node(ntype, aid,
+                          label=fpath[:80] if fpath else artifact_type,
+                          data={"type": artifact_type,
+                                "is_public": bool(int(row["is_public"] if "is_public" in row.keys() else 0))})
+
+        # ── Signal nodes ─────────────────────────────────────────
+        signal_rows = conn.execute(
+            "SELECT * FROM signals LIMIT 500"
+        ).fetchall()
+        for row in signal_rows:
+            d = _v1_row_to_dict(row)
+            sid = d["id"]
+            category = d.get("category") or "unknown"
+            eg.add_node("signal", sid,
+                        label=category,
+                        data={
+                            "description": (d.get("description") or "")[:200],
+                            "severity": d.get("severity") or "low",
+                            "category": category,
+                        })
+
+        # ── Signal → Artifact edges (inferred_from) ──────────────
+        # Use junction table for FK-validated signal↔artifact links
+        sa_rows = conn.execute(
+            "SELECT signal_id, artifact_id FROM signal_source_artifacts LIMIT 2000"
+        ).fetchall()
+        for sa in sa_rows:
+            try:
+                eg.add_edge("inferred_from", sa["signal_id"], sa["artifact_id"],
+                            weight=0.5)
+            except KeyError:
+                pass  # node not in graph yet
+
+        # ── Contradiction nodes + contradicts edges ──────────────
+        contradictions_rows = conn.execute(
+            "SELECT * FROM contradictions LIMIT 500"
+        ).fetchall()
+        for row in contradictions_rows:
+            d = _v1_row_to_dict(row)
+            cid = d["id"]
+            eg.add_node("contradiction", cid,
+                        label=d.get("category") or "contradiction",
+                        data={
+                            "description": d.get("description"),
+                            "severity": d.get("severity"),
+                            "resolution_suggestion": d.get("resolution_suggestion") or "",
+                        })
+            linked = d.get("claim_ids") or []
+            for claim_id in linked:
+                eg.add_edge("contradicts", cid, str(claim_id), weight=0.9)
+
+            # Audience affected
+            affected = d.get("audience_affected") or []
+            for aud in affected:
+                key = f"audience:{aud}"
+                if aud not in audience_ids:
+                    eg.add_node("audience", key,
+                                label=str(aud).replace("_", " ").title())
+                    audience_ids[aud] = key
+                eg.add_edge("risky_for", cid, audience_ids.get(aud, key))
+
+        # ── Risk nodes ───────────────────────────────────────────
+        risk_rows = conn.execute(
+            "SELECT * FROM risks LIMIT 500"
+        ).fetchall()
+        for row in risk_rows:
+            d = _v1_row_to_dict(row)
+            rid = d["id"]
+            eg.add_node("risk", rid,
+                        label=d.get("category") or "risk",
+                        data={
+                            "description": d.get("description"),
+                            "severity": d.get("severity"),
+                        })
+            affected = d.get("audience_affected") or []
+            for aud in affected:
+                key = f"audience:{aud}"
+                if aud not in audience_ids:
+                    eg.add_node("audience", key,
+                                label=str(aud).replace("_", " ").title())
+                    audience_ids[aud] = key
+                eg.add_edge("risky_for", rid, audience_ids.get(aud, key))
+
+            # Risk → claim edges via linked_claim_ids
+            linked_claims = d.get("linked_claim_ids") or []
+            for claim_id in linked_claims:
+                eg.add_edge("associated_with", rid, str(claim_id), weight=0.6)
+
+        # ── Repair nodes + repaired_by edges ─────────────────────
+        repair_rows = conn.execute(
+            "SELECT * FROM repairs LIMIT 500"
+        ).fetchall()
+        for row in repair_rows:
+            d = _v1_row_to_dict(row)
+            rid = d["id"]
+            eg.add_node("repair", rid,
+                        label=d.get("title") or "repair",
+                        data={
+                            "impact": d.get("impact"),
+                            "effort": d.get("effort"),
+                            "urgency": d.get("urgency"),
+                            "status": d.get("status"),
+                        })
+            linked_claim = d.get("linked_claim_id")
+            if linked_claim:
+                eg.add_edge("repaired_by", str(linked_claim), rid)
+
+            affected = d.get("affected_audience") or []
+            for aud in affected:
+                key = f"audience:{aud}"
+                if aud not in audience_ids:
+                    eg.add_node("audience", key,
+                                label=str(aud).replace("_", " ").title())
+                    audience_ids[aud] = key
+                eg.add_edge("repaired_by", audience_ids.get(aud, key), rid)
+
+        conn.close()
+
+        # ── Extract all nodes / edges for JSON export ────────────
+        from contextlib import closing
+        with closing(eg) as final_graph:
+            nodes = [final_graph._node(r) for r in
+                     final_graph.conn.execute(
+                         "SELECT * FROM nodes ORDER BY type,label,id").fetchall()]
+            edges = [final_graph._edge(r) for r in
+                     final_graph.conn.execute(
+                         "SELECT * FROM edges ORDER BY type,id").fetchall()]
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+        }
+    except Exception as exc:
+        import traceback
+        return {
+            "nodes": [], "edges": [],
+            "node_count": 0, "edge_count": 0,
+            "error": str(exc)[:300],
+            "traceback": traceback.format_exc()[-500:],
+        }
 
 
 def v1_repair_complete_payload(req: BaseHTTPRequestHandler, cfg: dict,

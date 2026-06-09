@@ -110,7 +110,7 @@ const steps=[
     <p>These are clustered groups of files that represent your projects, interests, and digital activity. In the next step, you'll choose which workstreams to include in your audit.</p>
     <p style="color:var(--muted);font-size:10px">Your raw files never leave your machine. Only metadata and cluster summaries are used for inference.</p>
   `,onEnter:async()=>{
-    try{const d=await api('/onboarding');$('ws_count').textContent=d.completed_steps?.length||'30+';$('file_count').textContent='115,000+'}catch(e){}
+    try{const d=await api('/onboarding');$('ws_count').textContent=d.completed_steps?.length||'—';$('file_count').textContent='—'}catch(e){$('ws_count').textContent='—';$('file_count').textContent='—'}
   }},
   {title:'Source Approval',html:`
     <p>Select which workstreams to include in your audit. Unapproved sources will be excluded from all inference.</p>
@@ -145,20 +145,29 @@ const steps=[
 ];
 
 async function loadWorkstreams(){
-  try{const d=await api('/onboarding');onboarding.sources=d.completed_steps||[];let h='Loading...';$('ws_list').innerHTML=h}
-  catch(e){$('ws_list').innerHTML='<p style="color:var(--muted)">Backend unavailable. Run audit from filesystem scan.</p>'}
-  const mock=['Optic','Gurm','Furion','Archived','Documents','Developer','Research','Projects','Hmmm Labs','Code'];
-  let h='';mock.forEach((n,i)=>{
-    const sel=onboarding.sources.includes(n);
-    h+=`<div class="card${sel?' selected':''}" id="ws_${i}" onclick="toggleWS(${i},'${n}')"><div class="card-title">📁 ${n}</div><div class="card-sub">~${Math.floor(Math.random()*5000+100)} files</div></div>`
-  });$('ws_list').innerHTML=h
+  $('ws_list').innerHTML='<div class="spinner"></div> Loading workstreams...';
+  try{
+    const d=await api('/sources');
+    const sources=d.sources||[];
+    if(sources.length===0){$('ws_list').innerHTML='<p style="color:var(--muted)">No workstreams found. Complete a filesystem scan first.</p>';return}
+    let h='';
+    sources.forEach((s,i)=>{
+      const name=s.user_label||s.type||`Source ${i+1}`;
+      const count='—';
+      const sel=onboarding.sources.includes(name);
+      h+=`<div class="card${sel?' selected':''}" id="ws_${i}" onclick="toggleWS(${i},'${name.replace(/'/g,"\\'")}')"><div class="card-title">📁 ${name}</div><div class="card-sub">${count}</div></div>`
+    });
+    $('ws_list').innerHTML=h
+  }catch(e){
+    $('ws_list').innerHTML='<p style="color:var(--muted)">Backend unavailable. Run audit from filesystem scan.</p>'
+  }
 }
 function toggleWS(i,name){
   const idx=onboarding.sources.indexOf(name);
   if(idx>=0)onboarding.sources.splice(idx,1);else onboarding.sources.push(name);
   $(`ws_${i}`).classList.toggle('selected')
 }
-function selectAllWS(){document.querySelectorAll('#ws_list .card').forEach(c=>c.classList.add('selected'));['Optic','Gurm','Furion','Archived','Documents','Developer','Research','Projects','Hmmm Labs','Code'].forEach(n=>{if(!onboarding.sources.includes(n))onboarding.sources.push(n)})}
+function selectAllWS(){document.querySelectorAll('#ws_list .card').forEach(c=>{c.classList.add('selected');const name=c.querySelector('.card-title').textContent.replace('📁 ','');if(!onboarding.sources.includes(name))onboarding.sources.push(name)})}
 function deselectAllWS(){document.querySelectorAll('#ws_list .card').forEach(c=>c.classList.remove('selected'));onboarding.sources=[]}
 
 function loadLenses(){
@@ -171,7 +180,7 @@ function loadLenses(){
 function toggleLens(id){const idx=onboarding.lenses.indexOf(id);if(idx>=0)onboarding.lenses.splice(idx,1);else onboarding.lenses.push(id);$(`lens_${id}`).classList.toggle('selected')}
 
 async function checkModel(){
-  try{const r=await fetch('http://localhost:3003/api/v1/health');const d=await r.json();onboarding.model_ok=true;$('model_status').innerHTML=`<p class="msg-success">✓ Ollama available · model: ${d.model||'phi4-mini'} · lenses: ${d.lenses||9}</p>`}
+  try{const d=await api('/health');onboarding.model_ok=true;$('model_status').innerHTML=`<p class="msg-success">✓ Ollama available · model: ${d.model||'...'} · lenses: ${d.lenses||0}</p>`}
   catch(e){onboarding.model_ok=false;$('model_status').innerHTML='<p class="msg-amber">⚠ Ollama not detected. Non-LLM structural views will still work.</p>'}
 }
 
@@ -186,7 +195,7 @@ function renderStep(){
 
 function renderAuditReady(){
   $('stat_src').textContent=onboarding.sources.length||'All';
-  $('stat_lens').textContent=onboarding.lenses.length||9;
+  $('stat_lens').textContent=onboarding.lenses.length||0;
   $('stat_mode').textContent=onboarding.audit_mode||'general'
 }
 

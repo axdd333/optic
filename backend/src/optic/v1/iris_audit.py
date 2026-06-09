@@ -329,8 +329,9 @@ class IrisAuditChat:
             "max_tokens": 500,
         }).encode()
         try:
+            base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
             req = urllib.request.Request(
-                "https://api.deepseek.com/v1/chat/completions",
+                f"{base}/chat/completions",
                 data=payload,
                 headers={
                     "Content-Type": "application/json",
@@ -363,8 +364,9 @@ class IrisAuditChat:
             "max_tokens": 500,
         }).encode()
         try:
+            base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
             req = urllib.request.Request(
-                "https://api.deepseek.com/v1/chat/completions",
+                f"{base}/chat/completions",
                 data=payload,
                 headers={
                     "Content-Type": "application/json",
