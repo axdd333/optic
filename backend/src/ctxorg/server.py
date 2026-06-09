@@ -8218,6 +8218,26 @@ def _export_to_csv(data: dict) -> tuple[str, bytes]:
     return (".csv", buf.getvalue().encode("utf-8"))
 
 
+def _sanitize_pdf_text(text: str) -> str:
+    """Replace Unicode characters not supported by the Helvetica core font."""
+    # Map common Unicode chars to ASCII equivalents
+    replacements = {
+        '\u2014': '--',   # em dash
+        '\u2013': '-',    # en dash
+        '\u2018': "'",    # left single quote
+        '\u2019': "'",    # right single quote
+        '\u201c': '"',    # left double quote
+        '\u201d': '"',    # right double quote
+        '\u2026': '...',  # ellipsis
+        '\u2022': '*',    # bullet
+        '\u00a0': ' ',    # non-breaking space
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    # Strip any remaining non-latin1 characters
+    return text.encode('latin-1', errors='replace').decode('latin-1')
+
+
 def _export_to_pdf(data: dict, run: str, ts: int) -> tuple[str, bytes]:
     """Convert report/audience data to a proper PDF."""
     import io
@@ -8225,10 +8245,10 @@ def _export_to_pdf(data: dict, run: str, ts: int) -> tuple[str, bytes]:
     pdf.add_page()
     # Title
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 12, "Optic Export Report", ln=True, align="C")
+    pdf.cell(0, 12, _sanitize_pdf_text("Optic Export Report"), ln=True, align="C")
     pdf.ln(4)
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, f"Run: {run}  |  Generated: {ts}", ln=True, align="C")
+    pdf.cell(0, 6, _sanitize_pdf_text(f"Run: {run}  |  Generated: {ts}"), ln=True, align="C")
     pdf.ln(8)
 
     # Corpus section
@@ -8236,9 +8256,10 @@ def _export_to_pdf(data: dict, run: str, ts: int) -> tuple[str, bytes]:
         if pdf.get_y() > 250:
             pdf.add_page()
         pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(0, 8, title, ln=True)
+        pdf.cell(0, 8, _sanitize_pdf_text(title), ln=True)
         pdf.set_font("Helvetica", "", 10)
         for line in content_lines:
+            line = _sanitize_pdf_text(line)
             if len(line) > 120:
                 line = line[:117] + "..."
             pdf.cell(0, 5, line, ln=True)
@@ -8261,12 +8282,12 @@ def _export_to_pdf(data: dict, run: str, ts: int) -> tuple[str, bytes]:
         if isinstance(wss, list) and wss:
             _add_section(f"Workstreams ({len(wss)})", [])
             for ws in wss[:30]:
-                name = str(ws.get("name", ""))
+                name = _sanitize_pdf_text(str(ws.get("name", "")))
                 fc = ws.get("file_count", "?")
                 conf = ws.get("confidence", 0)
                 conf_s = f"{int(conf*100)}%" if isinstance(conf, float) else str(conf)
-                summary = str(ws.get("summary", ""))[:120]
-                pdf.cell(0, 5, f"  {name} — {fc} files, {conf_s} confidence", ln=True)
+                summary = _sanitize_pdf_text(str(ws.get("summary", "")))[:120]
+                pdf.cell(0, 5, f"  {name} -- {fc} files, {conf_s} confidence", ln=True)
                 if summary:
                     pdf.set_font("Helvetica", "", 9)
                     pdf.cell(0, 5, f"    {summary}", ln=True)
@@ -8290,7 +8311,7 @@ def _export_to_pdf(data: dict, run: str, ts: int) -> tuple[str, bytes]:
     # Watermark
     pdf.ln(6)
     pdf.set_font("Helvetica", "I", 8)
-    pdf.cell(0, 5, "Optic self-audit. Not a consumer report. Not a verdict.", ln=True, align="C")
+    pdf.cell(0, 5, _sanitize_pdf_text("Optic self-audit. Not a consumer report. Not a verdict."), ln=True, align="C")
 
     buf = io.BytesIO()
     pdf.output(buf)
@@ -8306,7 +8327,7 @@ def _export_to_md(data: dict, run: str, ts: int) -> tuple[str, bytes]:
     if not isinstance(data, dict):
         return (".md", md.encode("utf-8"))
 
-    corpus = data.get("corpus", {})
+    corpus = data.get("corpus", data.get("report", {}).get("corpus", {}))
     if corpus:
         md += "## Corpus\n\n"
         md += f"- Total files: {corpus.get('total_files', 'N/A')}\n"
@@ -9100,21 +9121,52 @@ def _v1_audit_bg():
             log.warning("V1 audit: contradiction engine failed: %s", exc)
 
         # ── Stages 9-10: Risk mapping from contradictions + repair generation ──
-        risk_defs = [
-            (RiskCategory.STALE_CONTEXT, "Some workstreams may contain stale files",
-             Severity.LOW, ["recruiter", "investor"]),
-            (RiskCategory.NARRATIVE_FRAGMENTATION, "Workstreams span multiple unrelated topics",
-             Severity.MEDIUM, ["all"]),
-            (RiskCategory.MISSING_PROOF, "Some projects lack public documentation",
-             Severity.LOW, ["recruiter", "investor"]),
-        ]
-        for rcat, rdesc, rsev, raud in risk_defs:
+        # Derive risks from actual contradiction output (not hardcoded)
+        all_contra_rows = conn_rw.execute(
+            "SELECT * FROM contradictions ORDER BY created_at DESC LIMIT 50"
+        ).fetchall()
+        if all_contra_rows:
+            seen_cats: set[str] = set()
+            for c_row in all_contra_rows:
+                cd = _v1_row_to_dict(c_row)
+                cat = cd.get("category", "misc")
+                if cat in seen_cats:
+                    continue
+                seen_cats.add(cat)
+                try:
+                    cids = json.loads(cd.get("claim_ids", "[]") or "[]")
+                    aids_list = json.loads(cd.get("artifact_ids", "[]") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    cids, aids_list = [], []
+                aud = cd.get("audience_affected") or []
+                if isinstance(aud, str):
+                    try:
+                        aud = json.loads(aud)
+                    except (json.JSONDecodeError, TypeError):
+                        aud = [aud]
+                rid = str(_uuid4())
+                conn_rw.execute(
+                    "INSERT OR REPLACE INTO risks(id, category, description, severity, "
+                    "linked_claim_ids, linked_artifact_ids, audience_affected, created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (rid, cat, (cd.get("description") or cd.get("resolution_suggestion") or "")[:300],
+                     cd.get("severity", "low"),
+                     json.dumps(cids[:10]), json.dumps(aids_list[:10]),
+                     json.dumps(aud if isinstance(aud, list) else []),
+                     now_iso)
+                )
+
+        # Fallback: if no contradictions produced risks, add honest note
+        rem_risks = conn_rw.execute("SELECT COUNT(*) as c FROM risks").fetchone()
+        if not rem_risks or rem_risks["c"] == 0:
             rid = str(_uuid4())
             conn_rw.execute(
                 "INSERT OR REPLACE INTO risks(id, category, description, severity, "
                 "linked_claim_ids, linked_artifact_ids, audience_affected, created_at) "
                 "VALUES(?,?,?,?,?,?,?,?)",
-                (rid, rcat.value, rdesc, rsev.value, "[]", "[]", json.dumps(raud), now_iso)
+                (rid, "missing_proof",
+                 "Audit produced no contradictions — run a scan to populate analysis.",
+                 "low", "[]", "[]", json.dumps(["all"]), now_iso)
             )
 
         repair_defs = [

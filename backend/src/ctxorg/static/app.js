@@ -6,9 +6,9 @@ const el = {
   scanBtn: document.querySelector("#scanBtn"),
   run: document.querySelector("#run"),
   search: document.querySelector("#search"),
-  leftnav: document.querySelector(".leftnav"),
+  leftNav: document.querySelector(".left-nav"),
   mobileNav: document.querySelector("#mobileNav"),
-  leftnavSettingsBtn: document.querySelector("#leftnavSettingsBtn"),
+  leftNavSettingsBtn: document.querySelector("#leftnavSettingsBtn"),
   tip: document.querySelector("#tooltip"),
   inspector: document.querySelector("#inspector"),
   counts: document.querySelector("#counts"),
@@ -64,6 +64,8 @@ const state = {
   simulations: [],
   settings: null,
   status: null,
+  v1Status: null,         // real stats from /api/v1/status
+  v1StatusError: false,   // true if /api/v1/status failed
   report: null,
   account: { signed_in: false, account: null },
   graph: { nodes: [], links: [] },
@@ -123,6 +125,7 @@ async function boot() {
     refreshHomeData(),
     refreshReport(),
     refreshStatus(),
+    refreshV1Status(),
     refreshSettings(),
   ]);
   if (window.__opticSyncAccount) await window.__opticSyncAccount();
@@ -130,7 +133,13 @@ async function boot() {
   normalizeSettingsEntryPoints();
   bindShell();
   state.manager = new ModeManager();
-  state.manager.switch(startModeFromUrl());
+  // First visit: auto-trigger onboarding unless already completed
+  const startMode = startModeFromUrl();
+  if (!localStorage.getItem("optic_onboarded")) {
+    state.manager.switch("onboard");
+    return;
+  }
+  state.manager.switch(startMode);
   // Iris welcome greeting
   irisWelcome();
 }
@@ -158,7 +167,7 @@ function normalizeShellNav() {
     top.querySelectorAll("[data-mode], .modebar, .mode-tabs, .top-nav, " +
       ".nav-tabs").forEach(node => node.remove());
   }
-  dedupeModeButtons(el.leftnav);
+  dedupeModeButtons(el.leftNav);
   dedupeModeButtons(el.mobileNav);
 }
 
@@ -258,6 +267,20 @@ async function refreshStatus(force = false) {
   } catch (_) {
     syncTopbarPresence();
     return state.status || {};
+  }
+}
+
+async function refreshV1Status(force = false) {
+  if (!force && state.v1Status) return state.v1Status;
+  try {
+    const data = await getJson("/api/v1/status");
+    state.v1Status = data || {};
+    state.v1StatusError = false;
+    return state.v1Status;
+  } catch (_) {
+    state.v1Status = null;
+    state.v1StatusError = true;
+    return null;
   }
 }
 
@@ -421,9 +444,9 @@ function syncSelected() {
 function bindShell() {
   el.run.addEventListener("change", changeRun);
   el.search.addEventListener("input", search);
-  el.leftnav?.addEventListener("click", chooseMode);
+  el.leftNav?.addEventListener("click", chooseMode);
   el.mobileNav?.addEventListener("click", chooseMode);
-  el.leftnavSettingsBtn?.addEventListener("click", () => {
+  el.leftNavSettingsBtn?.addEventListener("click", () => {
     if (typeof window.__opticOpenSettings === "function") {
       window.__opticOpenSettings();
       return;
@@ -475,16 +498,30 @@ function bindShell() {
 async function syncShellNow() {
   const mode = state.manager?.name || startModeFromUrl();
   el.scanBtn.disabled = true;
+  el.scanBtn.textContent = "Scanning…";
   try {
+    // Trigger actual scan + audit pipeline
+    await postJson("/api/scan", { folders: [state.homeData?.home || "~"] });
+    // Wait a moment then refresh all data
+    await new Promise(r => setTimeout(r, 2000));
+    await getJson("/api/v1/audit/general");
     await Promise.all([refreshHomeData(true), refreshReport(true),
-      refreshStatus(true), refreshSettings(true)]);
+      refreshStatus(true), refreshV1Status(true), refreshSettings(true)]);
     updateStatusIndex(state.homeData || {});
     state.manager?.reload();
     writeUrlState(mode);
   } catch (_) {
-    return;
+    // Fall back to just refreshing data
+    try {
+      await Promise.all([refreshHomeData(true), refreshReport(true),
+        refreshStatus(true), refreshV1Status(true), refreshSettings(true)]);
+      updateStatusIndex(state.homeData || {});
+      state.manager?.reload();
+      writeUrlState(mode);
+    } catch (__) { console.warn("syncShellNow refresh fallback failed:", __); }
   } finally {
     el.scanBtn.disabled = false;
+    el.scanBtn.textContent = "Sync";
   }
 }
 
@@ -513,6 +550,8 @@ function chooseIrisMode(ev) {
     state.mirrorRan = true;
     streamIris("Run full adversarial footprint analysis");
   }
+  // Refresh the right rail — some modes (contradiction) have dedicated panels
+  if (state.manager?.name === "iris") renderPanel();
 }
 
 function syncIrisModeTabs() {
@@ -643,7 +682,7 @@ function search() {
   state.q = el.search.value.trim().toLowerCase();
   state.highlightCluster = null; // searching clears cluster focus
   state.nodes.forEach(n => n.glow = matches(n) ? 16 : 0);
-  state.manager.mode.onSearch(state.q);
+  state.manager?.mode?.onSearch?.(state.q);
 }
 
 function chooseMode(ev) {
@@ -673,7 +712,7 @@ function key(ev) {
   if (ev.key === "7") return state.manager.switch("audiences");
   if (ev.key === "8") return state.manager.switch("simulations");
   if (ev.key === "9") return state.manager.switch("exports");
-  state.manager.mode.onKey(ev);
+  state.manager?.mode?.onKey?.(ev);
 }
 
 function typing(t) {
@@ -701,6 +740,7 @@ class ModeManager {
   constructor() {
     this.mode = null;
     this.name = "";
+    this._switchId = 0;
     this.modes = {
       workstreams: new WorkstreamsMode(),
       topology: new TopologyMode(),
@@ -711,16 +751,18 @@ class ModeManager {
       audiences: new AudiencesMode(),
       simulations: new SimulationsMode(),
       exports: new ExportsMode(),
-      onboard: new OnboardMode(),
+      onboard: new OnboardingMode(),
     };
   }
 
-  switch(name) {
+  async switch(name) {
+    const myId = ++this._switchId;
     const next = this.modes[name];
     if (!next) return;
     if (this.mode) this.mode.unmount();
     this.name = name;
-    writeUrlState(name);
+    // Don't rewrite URL during onboarding — keep the URL clean
+    if (name !== "onboard") writeUrlState(name);
     normalizeShellNav();
     // Toggle universe dark bg class on app root
     document.querySelector(".app").dataset.mode = name;
@@ -735,19 +777,22 @@ class ModeManager {
       el.canvas.hidden = false;
       el.cards.hidden = true;
       el.onboard.hidden = true;
-      this.mode.mount(el.canvas);
+      await this.mode.mount(el.canvas);
+      if (this._switchId !== myId) return;
     } else if (name === "onboard") {
       el.draft.placeholder = "Ask Iris about your files…";
       el.canvas.hidden = true;
       el.cards.hidden = true;
       el.onboard.hidden = false;
-      this.mode.mount(el.onboard);
+      await this.mode.mount(el.onboard);
+      if (this._switchId !== myId) return;
     } else {
       el.draft.placeholder = "Ask Iris about your files…";
       el.canvas.hidden = true;
       el.onboard.hidden = true;
       el.cards.hidden = false;
-      this.mode.mount(el.cards);
+      await this.mode.mount(el.cards);
+      if (this._switchId !== myId) return;
     }
     toggleTimelineHud(name === "timeline");
     renderPanel();
@@ -761,16 +806,18 @@ class ModeManager {
     });
   }
 
-  reload() {
+  async reload() {
+    const myId = ++this._switchId;
     this.mode.unmount();
     if (CANVAS_MODES.has(this.name)) {
       this.resetCanvas();
-      this.mode.mount(el.canvas);
+      await this.mode.mount(el.canvas);
     } else if (this.name === "onboard") {
-      this.mode.mount(el.onboard);
+      await this.mode.mount(el.onboard);
     } else {
-      this.mode.mount(el.cards);
+      await this.mode.mount(el.cards);
     }
+    if (this._switchId !== myId) return;
     toggleTimelineHud(this.name === "timeline");
     renderPanel();
   }
@@ -795,9 +842,9 @@ class WorkstreamsMode {
     this.sortBy = "relevance";
     this.view = "grid";
     this.expanded = new Set();
-    this.globeRaf = 0;
-    this.globeTick = 0;
-    this.globePts = [];
+    this.pixiApp = null;
+    this.pixiClusters = [];
+    this.pixiRaf = 0;
     this.onClick = ev => this.handleClick(ev);
     this.onChange = ev => this.handleChange(ev);
   }
@@ -805,40 +852,52 @@ class WorkstreamsMode {
   async mount(container) {
     this.container = container;
     this.renderLoading();
+    this.renderInspectorSkeleton();
     el.draft.placeholder = "Ask Iris about your files…";
     try {
+      // Always fetch fresh workstream data from the API
       let resp = {};
-      const fromCache = state.workstreams.length > 0;
-      if (!fromCache) {
-        try {
-          resp = await getJson("/api/workstreams");
-        } catch (_) {}
+      let fetchOk = false;
+      try {
+        resp = await getJson("/api/workstreams");
+        fetchOk = true;
+      } catch (_) {
+        // fetch failed — fall back to cached data if available
       }
       const data = Array.isArray(resp) ? resp : (resp.workstreams || []);
       this.workstreams = data.length ? data : state.workstreams;
       this.workstreams = this.workstreams.map(ws => this.normWorkstream(ws));
       state.workstreams = this.workstreams;
       this.filtered = this.workstreams;
+
+      // Fetch home data in parallel
+      const homePromise = refreshHomeData();
+      const audiencesPromise = refreshAudiences();
+
       if (!this.workstreams.length) {
-        state.manager.switch("onboard");
+        // No data at all — show empty state with CTA to onboarding
+        this.renderEmpty();
         return;
       }
-      await refreshHomeData();
-      await refreshAudiences();
+
+      await homePromise;
+      await audiencesPromise;
       this.updateStatusBar(this.workstreams);
       this.renderShell();
       this.applyFilters();
       this.renderInspector(this.workstreams);
       // If Gemma naming is still in progress, poll until ready then refresh
-      if (!fromCache && !resp.cached) this.pollForGemmaNames();
+      if (fetchOk && !resp.cached) this.pollForGemmaNames();
     } catch (err) {
-      this.container.innerHTML = `<div class="cards-empty">
-        <p>Could not load workstreams: ${esc(err.message)}</p></div>`;
+      this.renderError(
+        `Could not load workstreams: ${esc(err.message || String(err))}`,
+        () => this.mount(this.container));
     }
   }
 
   unmount() {
-    this.stopMiniGlobe();
+    this.stopMiniClusters();
+    this.stopGlobe();
     if (this.container) {
       this.container.removeEventListener("click", this.onClick);
       this.container.removeEventListener("change", this.onChange);
@@ -851,6 +910,51 @@ class WorkstreamsMode {
       <span class="pulse-dot"></span>
       <span>Loading workstreams…</span>
     </div>`;
+  }
+
+  renderInspectorSkeleton() {
+    el.inspector.innerHTML = `
+      <section class="rail-card rail-skeleton">
+        <div class="skeleton-block skeleton-pulse" style="height:24px;width:60%;margin-bottom:8px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:50%;margin-bottom:16px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:100px;width:100%;margin-bottom:16px;border-radius:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:30%;margin-bottom:8px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:40%;margin-bottom:8px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:35%"></div>
+      </section>
+      <section class="rail-card rail-skeleton">
+        <div class="skeleton-block skeleton-pulse" style="height:18px;width:50%;margin-bottom:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:32px;width:100%;margin-bottom:12px;border-radius:8px"></div>
+      </section>
+      <section class="rail-card rail-skeleton">
+        <div class="skeleton-block skeleton-pulse" style="height:18px;width:40%;margin-bottom:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:48px;width:100%"></div>
+      </section>`;
+  }
+
+  renderError(msg, retryFn) {
+    this.container.innerHTML = `<div class="cards-error">
+      <div class="cards-error-icon">⚠️</div>
+      <p class="cards-error-msg">${esc(msg)}</p>
+      ${retryFn ? `<button class="cards-error-retry" type="button">Try again</button>` : ""}
+    </div>`;
+    if (retryFn) {
+      const btn = this.container.querySelector(".cards-error-retry");
+      if (btn) btn.addEventListener("click", retryFn);
+    }
+  }
+
+  renderEmpty() {
+    this.container.innerHTML = `<section class="home-header">
+      <h1 class="home-title">Home</h1>
+      <p class="home-sub">Optic analyzes your digital footprint to surface what humans and algorithms infer about you.</p>
+    </section>
+    <div class="cards-empty">
+      <p>No workstreams found. Try scanning a folder to populate your dashboard.</p>
+      <button class="cards-error-retry" type="button">Start onboarding</button>
+    </div>`;
+    const btn = this.container.querySelector(".cards-error-retry");
+    if (btn) btn.addEventListener("click", () => state.manager.switch("onboard"));
   }
 
   renderShell() {
@@ -912,44 +1016,83 @@ class WorkstreamsMode {
 
   async renderInspector(cards) {
     const hd = state.homeData || {};
-    const narr = this.narratives(cards);
+    const vs = state.v1Status || {};
+    const vsErr = state.v1StatusError;
+    // Narratives from /api/home (real data array), fall back to client-side derivation
+    const apiNarratives = Array.isArray(hd.narratives) ? hd.narratives : [];
+    const narr = apiNarratives.length ? apiNarratives : this.narratives(cards);
+    const narrEmpty = !narr.length;
+    // Stats from /api/v1/status (real data: claims, repairs, reports — user counts hidden)
+    const claims = vsErr ? "—" : Number(vs.claims || 0).toLocaleString();
+    const repairs = vsErr ? "—" : Number(vs.pending_repairs || vs.repairs || 0).toLocaleString();
+    const reports = vsErr ? "—" : Number(vs.reports || 0).toLocaleString();
     const total = Number(hd.signal_count || state.nodes.length || 0);
-    const narrN = Number(hd.workstreams_count || cards.length || 0);
-    const audRows = state.audiences.length ? state.audiences : defaultAudiences();
-    const audN = audRows.length || 4;
+    const audRows = state.audiences.length ? state.audiences : [];
     const ago = esc(hd.last_analyzed_ago || "—");
     const sum = state.homeSummary || hd.iris_summary || null;
     const sumTxt = sum ? esc(String(sum).slice(0, 170)) :
       "Iris summary is generating from your current run.";
     const quick = audRows.slice(0, 3).map(a => {
-      const s = Number(a.score || 0);
-      const tier = s >= 80 ? "High" : s >= 70 ? "Moderate" : "Watch";
+      const s = scoreNum(a.score);
+      const tier = scoreLabel(a.score);
       return `<div class="rail-quick-row">
         <span class="rail-quick-name">${esc(a.name || a.id || "Audience")}</span>
-        <span class="rail-quick-score">${s}</span>
-        <span class="rail-quick-tier">${tier}</span>
+        <span class="rail-quick-score">${s !== null ? s : "--"}</span>
+        <span class="rail-quick-tier">${tier || "—"}</span>
       </div>`;
     }).join("");
+    // Metric grid: V1 status stats or error state (white frost-glass preserved)
+    let metricsHTML;
+    if (vsErr || (vs.status === "error")) {
+      metricsHTML = `<div class="rail-error-msg">
+        <span class="rail-error-icon">⚠</span>
+        Stats unavailable — backend may be starting up
+      </div>`;
+    } else if (state.v1Status && !vs.users && !vs.claims && !vs.pending_repairs && !vs.reports) {
+      // API responded with zeros — honest empty state
+      metricsHTML = `<div class="rail-metric-grid rail-empty-state">
+        <div class="rail-metric"><span>Claims</span><b>0</b></div>
+        <div class="rail-metric"><span>Repairs</span><b>0</b></div>
+        <div class="rail-metric"><span>Reports</span><b>0</b></div>
+      </div>`;
+    } else if (!state.v1Status) {
+      // Still loading — show placeholders
+      metricsHTML = `<div class="rail-metric-grid">
+        <div class="rail-metric"><span>Claims</span><b>—</b></div>
+        <div class="rail-metric"><span>Repairs</span><b>—</b></div>
+        <div class="rail-metric"><span>Reports</span><b>—</b></div>
+      </div>`;
+    } else {
+      metricsHTML = `<div class="rail-metric-grid">
+        <div class="rail-metric"><span>Claims</span><b>${claims}</b></div>
+        <div class="rail-metric"><span>Repairs</span><b>${repairs}</b></div>
+        <div class="rail-metric"><span>Reports</span><b>${reports}</b></div>
+      </div>`;
+    }
+    // Narratives section: API data or honest empty state
+    let narrHTML;
+    if (narrEmpty) {
+      narrHTML = `<div class="rail-muted">
+        <span class="rail-chip rail-chip-empty">No narratives inferred yet — try running an audit</span>
+      </div>`;
+    } else {
+      narrHTML = `<div class="rail-chip-row">${narr.map(t =>
+        `<span class="rail-chip">${esc(t)}</span>`).join("")}</div>`;
+    }
     el.inspector.innerHTML = `
       <section class="rail-card">
         <h2 class="rail-head">Your digital self</h2>
         <p class="rail-sub">Private · local · on-device</p>
         <div class="panel-globe"><canvas id="homeGlobe" width="176"
           height="176"></canvas></div>
-        <div class="rail-metric-grid">
-          <div class="rail-metric"><span>Files indexed</span><b>${
-            total.toLocaleString()}</b></div>
-          <div class="rail-metric"><span>Topics found</span><b>${narrN}</b></div>
-          <div class="rail-metric"><span>Last analyzed</span><b>${ago}</b></div>
-        </div>
+        ${metricsHTML}
       </section>
       <section class="rail-card">
         <div class="rail-card-head">
           <h3>Top inferred narratives</h3>
           <button class="rail-link" type="button">View all</button>
         </div>
-        <div class="rail-chip-row">${narr.map(t =>
-          `<span class="rail-chip">${esc(t)}</span>`).join("")}</div>
+        ${narrHTML}
       </section>
       <section class="rail-card">
         <div class="rail-card-head">
@@ -964,6 +1107,15 @@ class WorkstreamsMode {
         <p class="muted">${sumTxt}</p>
         <button class="rail-cta" type="button"
           data-mode-jump="simulations">Run simulation</button>
+      </section>
+      <section class="rail-card">
+        <div class="rail-card-head">
+          <h3>Repair queue</h3>
+          <button class="rail-link" type="button" id="viewAllRepairs">View all</button>
+        </div>
+        <div class="repair-queue" id="repairQueuePreview">
+          <span class="pulse-dot"></span> <span>Loading repairs…</span>
+        </div>
       </section>`;
     const jump = el.inspector.querySelector("[data-mode-jump]");
     if (jump) {
@@ -978,12 +1130,12 @@ class WorkstreamsMode {
       });
     }
     const globe = el.inspector.querySelector("#homeGlobe");
-    if (globe) this.startMiniGlobe(globe, Math.min(200, total || 120));
+    if (globe) this.startGlobe(globe);
     updateStatusIndex(hd);
+    fetchRepairPreview();
   }
 
   async pollForGemmaNames() {
-    // Show subtle "naming in progress" indicator in status bar
     const orig = el.counts ? el.counts.textContent : "";
     if (el.counts) el.counts.textContent = `${orig} · naming…`;
     for (let i = 0; i < 20; i++) {
@@ -1037,7 +1189,7 @@ class WorkstreamsMode {
         <span class="ws-ev-name">${esc(row.name)}</span>
         <span class="ws-ev-loc">${esc(row.loc)}</span>
       </div>`).join("");
-    return `<article class="ws-card ws-card2${expanded ? " ws-expanded" : ""}"
+    return `<article class="ws-card2${expanded ? " ws-expanded" : ""}"
       data-ws-id="${esc(this.wsId(ws))}">
       <div class="ws-card-header ws-card2-head">
         <div class="ws-icon ws-icon2" style="background:${iconBg}">
@@ -1153,7 +1305,7 @@ class WorkstreamsMode {
     const act = btn.dataset.action;
     if (act === "map") return this.focusCluster(ws);
     if (act === "inspect") {
-      this.toggleExpanded(this.wsId(ws));
+      showClaimsModal(ws);
       return;
     }
     if (act === "simulate") {
@@ -1254,21 +1406,22 @@ class WorkstreamsMode {
   }
 
   emoji(ws, cat) {
-    const text = this.topicText(ws);
-    if (text.includes("research") || text.includes("learning")) return "📚";
-    if (text.includes("career") || text.includes("work")) return "💼";
+    const name = (ws.name || "").toLowerCase();
+    const topics = (ws.topics || []).map(t => t.toLowerCase()).join(" ");
+    const text = `${topics} ${name}`;
+    if (text.includes("research") || text.includes("learning") || text.includes("ai")) return "📚";
+    if (text.includes("code") || text.includes("systems") || text.includes("software")) return "💻";
+    if (text.includes("finance") || text.includes("tax") || text.includes("admin")) return "💳";
+    if (text.includes("identity") || text.includes("profile") || text.includes("bio")) return "🪪";
+    if (text.includes("travel") || text.includes("photo") || text.includes("life")) return "✈️";
+    if (text.includes("career")) return "💼";
     if (text.includes("social") || text.includes("message")) return "💬";
-    if (text.includes("finance") || text.includes("purchase")) return "💳";
-    if (text.includes("write") || text.includes("journal")) return "✍️";
-    if (text.includes("photo") || text.includes("image")) return "📷";
-    if (text.includes("travel")) return "✈️";
     if (text.includes("health") || text.includes("fitness")) return "🏃";
-    if (text.includes("code") || text.includes("project")) return "💻";
-    if (text.includes("config") || text.includes("system")) return "⚙️";
+    if (text.includes("write") || text.includes("writing") || text.includes("journal")) return "✍️";
     const by = {
-      identity: "📁",
+      identity: "🪪",
       work: "💼",
-      life: "📷",
+      life: "✈️",
       relations: "💬",
       behavior: "💳",
     };
@@ -1344,13 +1497,13 @@ class WorkstreamsMode {
 
   audienceIdFor(ws) {
     const cat = this.wsCategory(ws);
-    if (cat === "behavior") return "lender";
+    if (cat === "behavior") return "stranger";
     if (cat === "relations" || cat === "life") return "stranger";
     if (cat === "identity") return "recruiter";
     const text = this.topicText(ws);
-    if (text.includes("finance")) return "lender";
+    if (text.includes("finance")) return "stranger";
     if (text.includes("startup") || text.includes("invest")) return "investor";
-    return "recruiter";
+    return null;
   }
 
   newestMtime(ws) {
@@ -1438,139 +1591,291 @@ class WorkstreamsMode {
     return null; // don't show unrecognised topics
   }
 
-  startMiniGlobe(canvas, count = 120) {
-    this.stopMiniGlobe();
-    if (window.THREE) {
-      try {
-        const w = canvas.width || 210;
-        const h = canvas.height || 210;
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(42, w / h, 1, 800);
-        camera.position.z = 170;
-        const renderer = new THREE.WebGLRenderer({
-          canvas,
-          alpha: true,
-          antialias: true,
-        });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-        renderer.setSize(w, h, false);
-        const n = Math.max(40, Math.min(200, count || 120));
-        const pos = new Float32Array(n * 3);
-        const col = new Float32Array(n * 3);
-        const vals = Object.values(palette);
-        for (let i = 0; i < n; i++) {
-          const u = Math.random() * 2 - 1;
-          const a = Math.random() * Math.PI * 2;
-          const rr = Math.sqrt(1 - u * u);
-          const idx = i * 3;
-          pos[idx] = rr * Math.cos(a) * 58;
-          pos[idx + 1] = u * 58;
-          pos[idx + 2] = rr * Math.sin(a) * 58;
-          const cc = new THREE.Color(vals[i % vals.length]);
-          col[idx] = cc.r;
-          col[idx + 1] = cc.g;
-          col[idx + 2] = cc.b;
-        }
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-        geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
-        const mat = new THREE.PointsMaterial({
-          size: 3.2,
-          vertexColors: true,
-          transparent: true,
-          opacity: 0.9,
-          depthWrite: false,
-        });
-        const cloud = new THREE.Points(geo, mat);
-        scene.add(cloud);
-        const shell = new THREE.Mesh(
-          new THREE.SphereGeometry(60, 22, 22),
-          new THREE.MeshBasicMaterial({
-            color: 0xffffff,
-            transparent: true,
-            opacity: 0.08,
-            wireframe: true,
-          }),
-        );
-        scene.add(shell);
-        this.globeRenderer = renderer;
-        this.globeScene = scene;
-        this.globeCamera = camera;
-        this.globeGeo = geo;
-        this.globeMat = mat;
-        this.globeShell = shell;
-        this.globeCloud = cloud;
-        const draw3d = () => {
-          this.globeRaf = requestAnimationFrame(draw3d);
-          cloud.rotation.y += 0.004;
-          cloud.rotation.x = Math.sin(Date.now() * 0.00045) * 0.22;
-          shell.rotation.y -= 0.002;
-          renderer.render(scene, camera);
-        };
-        draw3d();
-        return;
-      } catch (_) {}
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const n = Math.max(40, Math.min(220, count || 120));
-    this.globePts = [];
-    for (let i = 0; i < n; i++) {
-      const u = Math.random() * 2 - 1;
-      const a = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(1 - u * u);
-      this.globePts.push({ x: rr * Math.cos(a), y: u, z: rr * Math.sin(a) });
-    }
-    const colors = Object.values(palette);
-    const draw = () => {
-      this.globeRaf = requestAnimationFrame(draw);
-      this.globeTick += 0.008;
-      const w = canvas.width;
-      const h = canvas.height;
+  startMiniClusters(canvas, workstreams = []) {
+    this.stopMiniClusters();
+    if (!window.PIXI) return;
+
+    try {
+      const w = canvas.width || 210;
+      const h = canvas.height || 210;
+      const app = new PIXI.Application({
+        view: canvas,
+        width: w,
+        height: h,
+        backgroundColor: 0x000000,
+        backgroundAlpha: 0,
+        antialias: true,
+        resolution: Math.min(window.devicePixelRatio || 1, 2),
+        autoDensity: true,
+      });
+      this.pixiApp = app;
+
       const cx = w * 0.5;
       const cy = h * 0.5;
-      const rad = Math.min(w, h) * 0.36;
-      ctx.clearRect(0, 0, w, h);
-      ctx.beginPath();
-      ctx.arc(cx, cy, rad + 8, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,255,.34)";
-      ctx.fill();
-      this.globePts.forEach((p, idx) => {
-        const c = Math.cos(this.globeTick);
-        const s = Math.sin(this.globeTick);
-        const x = p.x * c - p.z * s;
-        const z = p.x * s + p.z * c;
-        const y = p.y;
-        const depth = (z + 1) * 0.5;
-        const dot = 1 + depth * 2.2;
-        const alpha = 0.28 + depth * 0.58;
-        ctx.fillStyle = hexToRgba(colors[idx % colors.length], alpha);
-        ctx.beginPath();
-        ctx.arc(cx + x * rad, cy + y * rad, dot, 0, Math.PI * 2);
-        ctx.fill();
+      const orbitRad = Math.min(w, h) * 0.32;
+
+      // Frosted-glass backdrop glow
+      const glow = new PIXI.Graphics();
+      glow.beginFill(0xffffff, 0.28);
+      glow.drawCircle(cx, cy, orbitRad + 22);
+      glow.endFill();
+      glow.filters = [new PIXI.BlurFilter(12)];
+      app.stage.addChild(glow);
+
+      // Subtle ring
+      const ring = new PIXI.Graphics();
+      ring.lineStyle(1, 0xffffff, 0.14);
+      ring.drawCircle(cx, cy, orbitRad + 6);
+      ring.lineStyle(1, 0xffffff, 0.06);
+      ring.drawCircle(cx, cy, orbitRad - 12);
+      app.stage.addChild(ring);
+
+      const ws = workstreams.length ? workstreams : [];
+      const clusterCount = Math.max(1, Math.min(ws.length, 8));
+      const used = ws.slice(0, clusterCount);
+
+      const colors = Object.values(palette);
+      const clusters = [];
+
+      used.forEach((stream, si) => {
+        const angle = (si / used.length) * Math.PI * 2;
+        const r = orbitRad;
+        const baseX = cx + Math.cos(angle) * r;
+        const baseY = cy + Math.sin(angle) * r;
+        const conf = Math.max(0.2, Math.min(1, Number(stream.confidence || 0.5)));
+        const color = colors[si % colors.length];
+        const particleCount = Math.floor(14 + conf * 22);
+
+        // Cluster container
+        const container = new PIXI.Container();
+
+        // Particles for this cluster
+        for (let i = 0; i < particleCount; i++) {
+          const dist = Math.random() * (8 + conf * 20);
+          const pa = Math.random() * Math.PI * 2;
+          const px = Math.cos(pa) * dist;
+          const py = Math.sin(pa) * dist;
+          const size = 1.2 + Math.random() * (1.8 + conf * 2.4);
+          const alpha = 0.4 + Math.random() * 0.5;
+
+          const dot = new PIXI.Graphics();
+          dot.beginFill(PIXI.utils.string2hex(color), alpha);
+          dot.drawCircle(0, 0, size);
+          dot.endFill();
+          dot.x = px;
+          dot.y = py;
+
+          // Subtle glow for each dot
+          const blur = new PIXI.BlurFilter(size * 0.5);
+          dot.filters = [blur];
+
+          container.addChild(dot);
+        }
+
+        // White core glow
+        const core = new PIXI.Graphics();
+        core.beginFill(0xffffff, 0.22);
+        core.drawCircle(0, 0, 3 + conf * 4);
+        core.endFill();
+        core.filters = [new PIXI.BlurFilter(3)];
+        container.addChild(core);
+
+        container.x = baseX;
+        container.y = baseY;
+
+        // Label
+        const name = String(stream.name || stream.id || "").slice(0, 20);
+        const label = new PIXI.Text(name, {
+          fontFamily: "Sora, system-ui, sans-serif",
+          fontSize: 9,
+          fill: 0xffffff,
+          align: "center",
+          fontWeight: "600",
+          dropShadow: true,
+          dropShadowColor: 0x000000,
+          dropShadowAlpha: 0.45,
+          dropShadowDistance: 1,
+          dropShadowBlur: 3,
+          letterSpacing: 0.2,
+        });
+        label.anchor.set(0.5, 0);
+        label.x = 0;
+        label.y = 6 + conf * 22 + 4;
+        container.addChild(label);
+
+        // Confidence ring
+        const confRing = new PIXI.Graphics();
+        confRing.lineStyle(1, PIXI.utils.string2hex(color), 0.35);
+        confRing.drawCircle(0, 0, 8 + conf * 20);
+        container.addChild(confRing);
+
+        app.stage.addChild(container);
+        clusters.push({
+          container,
+          baseX,
+          baseY,
+          angle,
+          orbitRad: r,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.0003 + Math.random() * 0.0006,
+          particleAngle: 0,
+          particleSpeed: 0.004 + conf * 0.008,
+        });
       });
-    };
-    draw();
+
+      this.pixiClusters = clusters;
+
+      // Animation loop
+      let tick = 0;
+      const animate = () => {
+        this.pixiRaf = requestAnimationFrame(animate);
+        tick += 0.008;
+        clusters.forEach(cl => {
+          // Orbit
+          cl.angle += cl.speed;
+          const a = cl.angle + cl.phase;
+          cl.container.x = cx + Math.cos(a) * cl.orbitRad;
+          cl.container.y = cy + Math.sin(a) * cl.orbitRad * 0.7;
+
+          // Gentle particle swirl
+          cl.particleAngle += cl.particleSpeed;
+          cl.container.rotation = cl.particleAngle * 0.4;
+        });
+        app.render();
+      };
+      animate();
+
+    } catch (_) { /* Pixi unavailable — silent fallback */ }
   }
 
-  stopMiniGlobe() {
+  stopMiniClusters() {
+    if (this.pixiRaf) {
+      cancelAnimationFrame(this.pixiRaf);
+      this.pixiRaf = 0;
+    }
+    if (this.pixiApp) {
+      this.pixiApp.destroy(true, { children: true, texture: true });
+      this.pixiApp = null;
+    }
+    this.pixiClusters = [];
+  }
+
+  startGlobe(canvas) {
+    this.stopGlobe();
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const w = canvas.width || 176;
+    const h = canvas.height || 176;
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+    const radius = Math.min(w, h) * 0.38;
+    const focalLength = radius * 1.8;
+
+    // Cool-tone palette: blues, purples, teals
+    const colors = [
+      "#5aa7ff", // Documents blue
+      "#4bd6c6", // Images teal
+      "#b889ff", // Other purple
+      "#6c8cff", // soft indigo
+      "#3dd6d0", // bright teal
+      "#9b6dff", // violet
+      "#4688e8", // deeper blue
+      "#5cc9c1", // muted teal
+    ];
+
+    const particleCount = 80;
+    const particles = [];
+
+    for (let i = 0; i < particleCount; i++) {
+      // Uniform distribution on sphere surface using spherical coords
+      const theta = Math.random() * Math.PI * 2;      // azimuth
+      const phi = Math.acos(2 * Math.random() - 1);    // inclination (uniform surface area)
+      const x = Math.sin(phi) * Math.cos(theta);
+      const y = Math.sin(phi) * Math.sin(theta);
+      const z = Math.cos(phi);
+
+      particles.push({
+        x, y, z,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        baseSize: 1.0 + Math.random() * 2.2,
+        twinklePhase: Math.random() * Math.PI * 2,
+        twinkleSpeed: 0.02 + Math.random() * 0.05,
+      });
+    }
+
+    let rotationY = 0;
+    let time = 0;
+
+    const animate = () => {
+      this.globeRaf = requestAnimationFrame(animate);
+      time += 0.016;
+      rotationY += 0.004;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Sort by z-depth (far first) for painter's algorithm
+      const projected = particles.map(p => {
+        // Rotate around Y axis
+        const cosY = Math.cos(rotationY);
+        const sinY = Math.sin(rotationY);
+        const rx = p.x * cosY + p.z * sinY;
+        const rz = -p.x * sinY + p.z * cosY;
+        const ry = p.y;
+
+        // Faux 3D perspective projection
+        const scale = focalLength / (focalLength + rz * radius);
+        const sx = cx + rx * radius * scale;
+        const sy = cy + ry * radius * scale;
+        const zNorm = (rz + 1) / 2; // 0 (back) to 1 (front)
+
+        return { ...p, sx, sy, zNorm, rz };
+      });
+
+      projected.sort((a, b) => a.rz - b.rz);
+
+      // Draw subtle glow ring (backdrop)
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+
+      // Draw particles
+      for (const p of projected) {
+        const alpha = 0.25 + p.zNorm * 0.7;
+        const twinkle = 0.7 + 0.3 * Math.sin(time * 3 + p.twinklePhase);
+        const size = p.baseSize * p.zNorm * twinkle;
+        if (size < 0.3) continue;
+
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, size, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = alpha * twinkle;
+        ctx.fill();
+
+        // Soft glow on brighter dots
+        if (p.zNorm > 0.6 && size > 1.5) {
+          ctx.beginPath();
+          ctx.arc(p.sx, p.sy, size * 2.0, 0, Math.PI * 2);
+          ctx.fillStyle = p.color;
+          ctx.globalAlpha = alpha * 0.12;
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    animate();
+  }
+
+  stopGlobe() {
     if (this.globeRaf) {
       cancelAnimationFrame(this.globeRaf);
       this.globeRaf = 0;
     }
-    this.globeGeo?.dispose?.();
-    this.globeMat?.dispose?.();
-    this.globeShell?.geometry?.dispose?.();
-    this.globeShell?.material?.dispose?.();
-    this.globeRenderer?.dispose?.();
-    this.globeRenderer = null;
-    this.globeScene = null;
-    this.globeCamera = null;
-    this.globeGeo = null;
-    this.globeMat = null;
-    this.globeShell = null;
-    this.globeCloud = null;
   }
+
 }
 
 class IrisMode {
@@ -1578,20 +1883,90 @@ class IrisMode {
     this.container = null;
     this.onClick = ev => this.click(ev);
     this.onSubmit = ev => this.submit(ev);
+    this.mountError = null;
   }
 
   async mount(container) {
     this.container = container;
-    await Promise.all([refreshHomeData(), refreshReport(), refreshStatus()]);
-    this.render();
+    this.mountError = null;
+    this.renderLoading();
+    try {
+      await Promise.all([refreshHomeData(), refreshReport(), refreshStatus()]);
+      const hasData = state.report || state.homeData?.iris_summary ||
+        state.homeSummary || state.workstreams?.length;
+      if (!hasData) {
+        this.renderEmpty();
+      } else {
+        this.render();
+      }
+    } catch (err) {
+      this.mountError = err.message || String(err);
+      this.renderError(this.mountError, () => this.mount(this.container));
+      return;
+    }
     this.container.addEventListener("click", this.onClick);
     this.container.addEventListener("submit", this.onSubmit);
+    syncIrisModeTabs();
   }
 
   unmount() {
     this.container?.removeEventListener("click", this.onClick);
     this.container?.removeEventListener("submit", this.onSubmit);
     if (this.container) this.container.innerHTML = "";
+    this.mountError = null;
+  }
+
+  renderLoading() {
+    this.container.innerHTML = `<section class="route-wrap iris-page">
+      <header class="route-head">
+        <h1>Iris</h1>
+        <p>Analytical intelligence for your digital universe.</p>
+      </header>
+      <section class="route-card rail-skeleton">
+        <div class="skeleton-block skeleton-pulse" style="height:24px;width:60%;margin-bottom:8px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:40%;margin-bottom:16px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:80px;width:100%;margin-bottom:16px;border-radius:12px"></div>
+      </section>
+      <section class="route-card rail-skeleton">
+        <div class="skeleton-block skeleton-pulse" style="height:20px;width:50%;margin-bottom:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:48px;width:100%;margin-bottom:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:48px;width:100%;margin-bottom:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:48px;width:100%"></div>
+      </section>
+    </section>`;
+  }
+
+  renderError(msg, retryFn) {
+    this.container.innerHTML = `<section class="route-wrap iris-page">
+      <header class="route-head">
+        <h1>Iris</h1>
+        <p>Analytical intelligence for your digital universe.</p>
+      </header>
+      <div class="cards-error">
+        <div class="cards-error-icon">⚠️</div>
+        <p class="cards-error-msg">${esc(msg)}</p>
+        ${retryFn ? `<button class="cards-error-retry" type="button">Try again</button>` : ""}
+      </div>
+    </section>`;
+    if (retryFn) {
+      const btn = this.container.querySelector(".cards-error-retry");
+      if (btn) btn.addEventListener("click", retryFn);
+    }
+  }
+
+  renderEmpty() {
+    this.container.innerHTML = `<section class="route-wrap iris-page">
+      <header class="route-head">
+        <h1>Iris</h1>
+        <p>Analytical intelligence for your digital universe.</p>
+      </header>
+      <div class="cards-empty">
+        <span>No report data yet. Run a scan to generate insights.</span>
+        <button class="cards-error-retry" type="button">Start onboarding</button>
+      </div>
+    </section>`;
+    const btn = this.container.querySelector(".cards-error-retry");
+    if (btn) btn.addEventListener("click", () => state.manager.switch("onboard"));
   }
 
   render() {
@@ -1606,7 +1981,7 @@ class IrisMode {
       return `<div class="iris-theme-row">
         <div class="iris-theme-main">
           <div class="iris-theme-title">${esc(ws.name || "Theme")}</div>
-          <p>${esc(ws.summary || "Signals grouped from your current run context.")}</p>
+          <p>${esc(ws.summary || "")}</p>
         </div>
         <div class="iris-theme-stats">
           <div><span>Coverage</span><b>${pct}%</b></div>
@@ -1677,7 +2052,7 @@ class IrisMode {
     syncIrisModeTabs();
     updateIrisChips(mode);
     updateEntityBar(mode);
-    streamIris(ask);
+    irisAskV1(ask);
   }
 
   submit(ev) {
@@ -1688,7 +2063,7 @@ class IrisMode {
     const q = String(input?.value || "").trim();
     if (!q) return;
     if (input) input.value = "";
-    streamIris(q);
+    irisAskV1(q);
   }
 
   onSearch() {}
@@ -1704,34 +2079,110 @@ class VaultMode {
       stale: [],
       largest: [],
     };
+    this.loading = false;
+    this.mountError = null;
+    this.searchDebounce = null;
     this.onClick = ev => this.click(ev);
+    this.onSearch = ev => this.handleSearch(ev);
+    this.onKey = ev => this.handleKey(ev);
   }
 
   async mount(container) {
     this.container = container;
-    await Promise.all([refreshHomeData(), refreshStatus(), refreshReport()]);
-    await this.loadAnalytics();
-    this.render();
+    this.loading = true;
+    this.mountError = null;
+    this.renderLoading();
+    try {
+      await Promise.all([refreshHomeData(), refreshStatus(), refreshReport()]);
+      await this.loadAnalytics();
+      this.loading = false;
+      this.render();
+    } catch (err) {
+      this.loading = false;
+      this.mountError = err.message || String(err);
+      this.renderError(this.mountError, () => this.mount(this.container));
+    }
     this.container.addEventListener("click", this.onClick);
+    // Wire search input
+    const input = this.container.querySelector(".vault-search");
+    if (input) input.addEventListener("input", this.onSearch);
   }
 
   unmount() {
     this.container?.removeEventListener("click", this.onClick);
+    const input = this.container?.querySelector(".vault-search");
+    if (input) input.removeEventListener("input", this.onSearch);
+    if (this.searchDebounce) clearTimeout(this.searchDebounce);
     if (this.container) this.container.innerHTML = "";
+    this.loading = false;
+    this.mountError = null;
+  }
+
+  renderLoading() {
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head">
+        <h1>Vault (Local) <span class="rail-chip">On-device</span></h1>
+        <p>Your private files and sources. Everything stays on this machine.</p>
+      </header>
+      <section class="route-card rail-skeleton">
+        <div class="skeleton-block skeleton-pulse" style="height:28px;width:60%;margin-bottom:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:40%;margin-bottom:20px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:80px;width:100%;margin-bottom:12px;border-radius:10px"></div>
+      </section>
+      <section class="vault-layout">
+        <aside class="vault-tree route-card rail-skeleton">
+          <div class="skeleton-block skeleton-pulse" style="height:18px;width:70%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:18px;width:60%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:18px;width:80%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:18px;width:50%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:14px;width:40%"></div>
+        </aside>
+        <section class="route-card vault-main rail-skeleton">
+          <div class="skeleton-block skeleton-pulse" style="height:36px;width:100%;margin-bottom:16px;border-radius:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:12px;width:100%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:12px;width:90%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:12px;width:95%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:12px;width:85%;margin-bottom:8px"></div>
+          <div class="skeleton-block skeleton-pulse" style="height:12px;width:75%"></div>
+        </section>
+      </section>
+      <section class="route-card rail-skeleton">
+        <div class="skeleton-block skeleton-pulse" style="height:20px;width:50%;margin-bottom:12px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:100%;margin-bottom:8px"></div>
+        <div class="skeleton-block skeleton-pulse" style="height:14px;width:80%"></div>
+      </section>
+    </section>`;
+  }
+
+  renderError(msg, retryFn) {
+    this.container.innerHTML = `<div class="cards-error">
+      <div class="cards-error-icon">⚠️</div>
+      <p class="cards-error-msg">${esc(msg)}</p>
+      ${retryFn ? `<button class="cards-error-retry" type="button">Try again</button>` : ""}
+    </div>`;
+    if (retryFn) {
+      const btn = this.container.querySelector(".cards-error-retry");
+      if (btn) btn.addEventListener("click", retryFn);
+    }
   }
 
   async loadAnalytics() {
     try {
-      const [dups, stale, large] = await Promise.all([
+      const [dups, stale, large, artData] = await Promise.all([
         getJson("/api/analyze?kind=duplicates&limit=8"),
         getJson("/api/analyze?kind=old_downloads&limit=10"),
         getJson("/api/analyze?kind=largest&limit=10"),
+        getJson("/api/v1/artifacts?limit=100"),
       ]);
       this.analytics.duplicates = Array.isArray(dups?.groups) ? dups.groups : [];
       this.analytics.stale = Array.isArray(stale?.items) ? stale.items : [];
       this.analytics.largest = Array.isArray(large?.items) ? large.items : [];
+      this.artifacts = Array.isArray(artData?.artifacts) ? artData.artifacts : [];
+      this.artifactTotal = artData?.total || 0;
     } catch (_) {
       this.analytics = { duplicates: [], stale: [], largest: [] };
+      this.artifacts = [];
+      this.artifactTotal = 0;
     }
   }
 
@@ -1744,92 +2195,119 @@ class VaultMode {
   }
 
   render() {
+    if (this.loading) return this.renderLoading();
+    if (this.mountError) return this.renderError(this.mountError,
+      () => this.mount(this.container));
+
     const home = state.homeData || {};
-    const stat = state.status || {};
-    const stage = stat?.progress?.stage || "idle";
-    const st = stat?.progress?.stage_state || "ready";
-    const run = stat?.last_run || "none";
-    const files = Number(home.file_count || state.nodes.length || 0);
+    const files = this.artifactTotal || Number(home.file_count || 0);
     const size = Number(home.total_size || 0);
-    const rows = (this.analytics.largest.length ? this.analytics.largest :
-      [...state.nodes]).slice(0, 10).map(n => {
-      const cat = n.category || category({ path: n.path || "", ext: n.ext || "" });
+
+    // Use real artifacts from scan — fall back to analytics
+    const rows = this.artifacts.length ? this.artifacts : this.analytics.largest;
+    const fileRows = rows.slice(0, 50).map(a => {
+      const cat = category({ path: a.path || "", ext: a.ext || "" });
       return `<tr>
-      <td>${esc(base(n.path))}</td>
+      <td title="${esc(a.path || "")}">${esc(base(a.path))}</td>
       <td>${esc(cat)}</td>
-      <td>${humanSize(n.size || 0)}</td>
-      <td>${esc(relTime(n.mtime))}</td>
+      <td>${humanSize(a.size || 0)}</td>
+      <td>${esc(a.mtime ? relTime(a.mtime) : "recently")}</td>
       <td>✓</td>
     </tr>`;
     }).join("");
-    const cats = ["Documents", "Code", "Images", "Video", "Other", "System"]
-      .map(name => ({
-        name,
-        count: state.nodes.filter(n => n.category === name).length,
-      }))
-      .sort((a, b) => b.count - a.count);
-    const catRows = cats.filter(c => c.count > 0).slice(0, 6);
-    const dupGroups = this.analytics.duplicates.slice(0, 4);
-    const dupRows = dupGroups.map(g => `<div class="vault-dup-row">
-      <b>${esc(String(g.name || "").slice(0, 42))}</b>
-      <span>${Number(g.count || 0)} copies · ${humanSize(this.duplicateWaste(g))} reclaimable</span>
-      <button class="route-btn route-btn--sm" data-act="duplicates">Review</button>
-    </div>`).join("");
-    const dupWaste = this.analytics.duplicates.reduce((sum, g) =>
-      sum + this.duplicateWaste(g), 0);
-    const staleN = this.analytics.stale.length;
+
+    // Real category counts from artifacts
+    const catMap = new Map();
+    for (const a of (this.artifacts || [])) {
+      const cat = category({ path: a.path || "", ext: a.ext || "" });
+      catMap.set(cat, (catMap.get(cat) || 0) + 1);
+    }
+    const catRows = [...catMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([name, count]) => `<div class="vault-tree-row"><span>${esc(name)}</span><b>${count.toLocaleString()}</b></div>`)
+      .join("");
+
     this.container.innerHTML = `<section class="route-wrap">
       <header class="route-head">
         <h1>Vault (Local) <span class="rail-chip">On-device</span></h1>
         <p>Your private files and sources. Everything stays on this machine.</p>
       </header>
       <section class="route-row vault-toolbar">
-        <button class="route-btn">All folders</button>
-        <button class="route-btn">Type: All</button>
-        <button class="route-btn">Size: Any</button>
-        <button class="route-btn">Modified: Any time</button>
-        <button class="route-btn">Source: All</button>
-        <button class="route-btn">More filters</button>
-        <input class="route-input" placeholder="Search in vault…">
+        <input class="route-input vault-search" placeholder="Search in vault…" autocomplete="off">
+        <button class="route-btn" data-act="reindex">Rescan</button>
       </section>
       <section class="vault-layout">
         <aside class="vault-tree route-card">
           <div class="vault-tree-row active"><span>All files</span><b>${
             files.toLocaleString()}</b></div>
-          ${catRows.map(c => `<div class="vault-tree-row"><span>${esc(c.name)}</span><b>${c.count.toLocaleString()}</b></div>`).join("")}
-          <div class="vault-tree-row"><span>Stale downloads</span><b>${staleN.toLocaleString()}</b></div>
-          <button class="route-btn route-btn--sm">+ Add folder to vault</button>
+          ${catRows || "<div class='vault-tree-row muted'><span>No categories yet</span><b>—</b></div>"}
+          <button class="route-btn route-btn--sm" data-act="reindex">+ Add folder to vault</button>
         </aside>
         <section class="route-card vault-main">
           <div class="route-kpis">
             <div><span>Files indexed</span><b>${files.toLocaleString()}</b></div>
             <div><span>Total size</span><b>${humanSize(size)}</b></div>
-            <div><span>Pipeline</span><b>${esc(stage)} · ${esc(st)}</b></div>
+            <div><span>Workstreams</span><b>${state.workstreams?.length || 0}</b></div>
           </div>
           <table class="vault-table">
-            <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>In index</th></tr></thead>
-            <tbody>${rows || "<tr><td colspan='5'>No files in view.</td></tr>"}</tbody>
+            <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>On disk</th></tr></thead>
+            <tbody>${fileRows || "<tr><td colspan='5' class='muted'>No files found. Run a scan to populate the vault.</td></tr>"}</tbody>
           </table>
         </section>
       </section>
       <section class="route-card">
-        <div class="route-card-head">
-          <h3>Duplicate groups</h3>
-          <span class="muted">${humanSize(dupWaste)} reclaimable</span>
-        </div>
-        <div class="vault-dup-list">${dupRows || "<p class='muted'>No duplicate groups found.</p>"}</div>
-      </section>
-      <div class="route-row">
-        <button class="route-cta" data-act="reindex">Re-index Vault</button>
-        <button class="route-btn" data-act="duplicates">Find Duplicates</button>
-        <button class="route-btn" data-act="stale">Find Stale</button>
-        <button class="route-btn" data-act="impact">Narrative Impact</button>
-      </div>
-      <section class="route-card">
-        <h3>Last run</h3>
-        <p class="muted">Run: ${esc(run)} · queue depth: ${Number(stat.queue_depth || 0)}</p>
+        <h3>Scan summary</h3>
+        <p class="muted">${files.toLocaleString()} files indexed across ${state.workstreams?.length || 0} workstreams. All data stays on-device.</p>
       </section>
     </section>`;
+  }
+
+  handleSearch(ev) {
+    if (this.searchDebounce) clearTimeout(this.searchDebounce);
+    const q = (ev?.target?.value || "").trim();
+    this.searchDebounce = setTimeout(() => {
+      this.searchVault(q);
+    }, 300);
+  }
+
+  async searchVault(q) {
+    if (!q) return this.render();
+    this.container.querySelector(".vault-main")?.classList.add("vault-main--loading");
+    try {
+      // Filter artifacts by search query
+      const filtered = (this.artifacts || []).filter(a =>
+        (a.path || "").toLowerCase().includes(q.toLowerCase()));
+      const rows = filtered.slice(0, 50).map(a => {
+        const cat = category({ path: a.path || "", ext: a.ext || "" });
+        return `<tr>
+        <td title="${esc(a.path || "")}">${esc(base(a.path))}</td>
+        <td>${esc(cat)}</td>
+        <td>${humanSize(a.size || 0)}</td>
+        <td>${esc(relTime(a.mtime || 0))}</td>
+        <td>✓</td>
+      </tr>`;
+      }).join("");
+      const tbody = this.container.querySelector(".vault-table tbody");
+      if (tbody) {
+        tbody.innerHTML = rows || `<tr><td colspan='5' class='muted'>No files matching "${esc(q)}"</td></tr>`;
+      }
+    } catch (_) {
+      const tbody = this.container.querySelector(".vault-table tbody");
+      if (tbody) tbody.innerHTML = `<tr><td colspan='5' class='cards-error-msg'>Search failed. Try again.</td></tr>`;
+    } finally {
+      this.container.querySelector(".vault-main")?.classList.remove("vault-main--loading");
+    }
+  }
+
+  handleKey(ev) {
+    if (ev.key === "Escape") {
+      const input = this.container?.querySelector(".vault-search");
+      if (input) {
+        input.value = "";
+        this.render();
+      }
+    }
   }
 
   click(ev) {
@@ -1839,14 +2317,13 @@ class VaultMode {
     if (act === "reindex") return state.manager.switch("onboard");
     if (act === "duplicates") return analyzeLocal("duplicates");
     if (act === "stale") return analyzeLocal("old_downloads");
+    if (act === "review-dup") return analyzeLocal("duplicates");
     if (act === "impact") {
       const run = state.status?.last_run || state.run || "latest";
       return streamIris(`Given run ${run}, explain how vault cleanup would change audience perception and what to remove first.`);
     }
   }
 
-  onSearch() {}
-  onKey() {}
   draw() {}
 }
 
@@ -1858,9 +2335,20 @@ class AudiencesMode {
 
   async mount(container) {
     this.container = container;
-    await refreshAudiences(true);
-    this.render();
+    this.renderLoading();
     this.container.addEventListener("click", this.onClick);
+    try {
+      await refreshAudiences(true);
+      if (!state.audiences.length) {
+        this.renderEmpty();
+        return;
+      }
+      this.render();
+    } catch (err) {
+      this.renderError(
+        `Could not load audiences: ${esc(err.message || String(err))}`,
+        () => this.mount(this.container));
+    }
   }
 
   unmount() {
@@ -1868,18 +2356,67 @@ class AudiencesMode {
     if (this.container) this.container.innerHTML = "";
   }
 
-  render() {
-    const rows = state.audiences.length ? state.audiences : defaultAudiences();
-    const cards = rows.map((r, idx) => `<article class="aud-card${
-      idx === 0 ? " active" : ""}" data-aud="${esc(r.id)}">
-      <h3>${esc(r.icon || "👤")} ${esc(r.name || r.id || "Audience")}</h3>
-      <div class="aud-score-row">
-        <b>${Number(r.score || 0)}%</b>
-        <span>${Number(r.score || 0) >= 75 ? "High" : "Moderate"} confidence</span>
+  renderLoading() {
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head">
+        <h1>Audiences</h1>
+        <p>See how different people and systems will perceive you.</p>
+      </header>
+      <div class="cards-loading">
+        <span class="pulse-dot"></span>
+        <span>Loading audiences…</span>
       </div>
-      <p>${esc(r.summary || "")}</p>
-      <span class="rail-chip">${idx % 2 ? "Execution" : "Technical"} signal</span>
-    </article>`).join("");
+    </section>`;
+  }
+
+  renderEmpty() {
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head">
+        <h1>Audiences</h1>
+        <p>See how different people and systems will perceive you.</p>
+      </header>
+      <div class="cards-empty">
+        <span>No audience data yet. Run an audit to generate audience profiles.</span>
+      </div>
+    </section>`;
+  }
+
+  renderError(msg, retryFn) {
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head">
+        <h1>Audiences</h1>
+        <p>See how different people and systems will perceive you.</p>
+      </header>
+      <div class="cards-error">
+        <div class="cards-error-icon">⚠️</div>
+        <p class="cards-error-msg">${esc(msg)}</p>
+        ${retryFn ? `<button class="cards-error-retry" type="button">Try again</button>` : ""}
+      </div>
+    </section>`;
+    if (retryFn) {
+      const btn = this.container.querySelector(".cards-error-retry");
+      if (btn) btn.addEventListener("click", retryFn);
+    }
+  }
+
+  render() {
+    const rows = state.audiences;
+    const cards = rows.map((r, idx) => {
+      const highlights = Array.isArray(r.highlights) ? r.highlights : [];
+      const sigChip = highlights.length
+        ? `<span class="rail-chip">${esc(highlights[0])}</span>`
+        : "";
+      return `<article class="aud-card${
+        idx === 0 ? " active" : ""}" data-aud="${esc(r.id)}">
+        <h3>${esc(r.icon || "👤")} ${esc(r.name || r.id || "Audience")}</h3>
+        <div class="aud-score-row">
+          <b>${scorePct(r.score)}</b>
+          <span>${scoreLabel(r.score) || "—"} confidence</span>
+        </div>
+        <p>${esc(r.summary || "")}</p>
+        ${sigChip}
+      </article>`;
+    }).join("");
     const cmpRows = rows.map(row => {
       const highs = Array.isArray(row.highlights) ? row.highlights : [];
       const risks = Array.isArray(row.risks) ? row.risks : [];
@@ -1887,7 +2424,7 @@ class AudiencesMode {
       const rk = risks.length ? risks.slice(0, 2).join(" · ") : "—";
       return `<tr>
         <td>${esc(row.name || row.id || "Audience")}</td>
-        <td>${Number(row.score || 0)}%</td>
+        <td>${scorePct(row.score)}</td>
         <td>${esc(hi)}</td>
         <td>${esc(rk)}</td>
       </tr>`;
@@ -1898,8 +2435,8 @@ class AudiencesMode {
         <p>See how different people and systems will perceive you.</p>
       </header>
       <div class="route-row">
-        <button class="route-btn">Manage audiences</button>
-        <button class="route-cta" data-aud="${esc(rows[0]?.id || "recruiter")}">Simulate top audience</button>
+        <button class="route-btn" disabled title="Coming soon">Manage audiences</button>
+        <button class="route-cta" data-aud="${esc(rows[0]?.id || "")}">Simulate top audience</button>
         <button class="route-btn" data-mode-jump="simulations">Open simulations</button>
       </div>
       <section class="aud-grid">${cards}</section>
@@ -1914,9 +2451,9 @@ class AudiencesMode {
         </table>
       </section>
       <section class="route-row">
-        <button class="route-btn">+ Add custom audience</button>
+        <button class="route-btn" disabled title="Coming soon">+ Add custom audience</button>
         <button class="route-btn" data-mode-jump="simulations">Open simulations</button>
-        <button class="route-cta">Export audience brief</button>
+        <button class="route-cta" disabled title="Coming soon">Export audience brief</button>
       </section>
     </section>`;
   }
@@ -1926,12 +2463,12 @@ class AudiencesMode {
     if (jump) return state.manager.switch(jump.dataset.modeJump);
     const card = ev.target.closest("[data-aud]");
     if (card && !ev.target.closest("button[data-aud]")) {
-      openAudienceModal(card.dataset.aud || "recruiter");
+      openAudienceModal(card.dataset.aud || "");
       return;
     }
     const btn = ev.target.closest("button[data-aud]");
     if (!btn) return;
-    openAudienceModal(btn.dataset.aud || "recruiter");
+    openAudienceModal(btn.dataset.aud || "");
   }
 
   onSearch() {}
@@ -1944,18 +2481,47 @@ class SimulationsMode {
     this.container = null;
     this.onClick = ev => this.click(ev);
     this.lastEval = null;
+    this.loading = false;
+    this.error = null;
+    this.savedScenarios = [];
   }
 
   async mount(container) {
     this.container = container;
-    await Promise.all([refreshAudiences(), refreshSimulations(true)]);
-    this.render();
+    this.renderLoading();
     this.container.addEventListener("click", this.onClick);
+    try {
+      await Promise.all([refreshAudiences(true), this.fetchScenarios()]);
+      if (!state.audiences.length && !this.savedScenarios.length) {
+        this.renderEmpty();
+        return;
+      }
+      this.render();
+    } catch (err) {
+      this.renderError(
+        `Could not load simulations: ${esc(err.message || String(err))}`,
+        () => this.mount(this.container));
+    }
   }
 
   unmount() {
     this.container?.removeEventListener("click", this.onClick);
     if (this.container) this.container.innerHTML = "";
+  }
+
+  async fetchScenarios() {
+    this.loading = true;
+    this.error = null;
+    try {
+      const data = await getJson("/api/v1/simulations");
+      this.savedScenarios = Array.isArray(data?.simulations) ? data.simulations : [];
+      state.simulations = this.savedScenarios;
+      this.loading = false;
+    } catch (err) {
+      this.loading = false;
+      this.error = err.message || String(err);
+      this.savedScenarios = [];
+    }
   }
 
   wsRows() {
@@ -1965,23 +2531,65 @@ class SimulationsMode {
   }
 
   shiftStats() {
-    const ref = this.lastEval || state.simulations[0];
-    if (!ref) {
-      return { before: "--", after: "--", delta: "--", cls: "" };
-    }
-    const before = Number(ref.before_score ?? ref.after_score ?? 0);
-    const after = Number(ref.after_score ?? 0);
-    const delta = after - before;
+    const ref = this.lastEval || this.savedScenarios[0];
+    if (!ref) return null;
+    const before = scoreNum(ref.before_score ?? ref.after_score);
+    const after = scoreNum(ref.after_score);
+    const delta = (after !== null && before !== null) ? (after - before) : null;
     return {
-      before: Math.round(before),
-      after: Math.round(after),
-      delta: fmtDelta(Math.round(delta)),
-      cls: delta >= 0 ? "good" : "bad",
+      before, after, delta,
+      cls: (delta !== null && delta >= 0) ? "good" : "bad",
     };
   }
 
+  renderLoading() {
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head">
+        <h1>Simulations</h1>
+        <p>Model how changes to your digital presence influence different audiences.</p>
+      </header>
+      <div class="cards-loading">
+        <span class="pulse-dot"></span>
+        <span>Loading simulations…</span>
+      </div>
+    </section>`;
+  }
+
+  renderError(msg, retryFn) {
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head">
+        <h1>Simulations</h1>
+        <p>Model how changes to your digital presence influence different audiences.</p>
+      </header>
+      <div class="cards-error">
+        <div class="cards-error-icon">⚠️</div>
+        <p class="cards-error-msg">${esc(msg)}</p>
+        ${retryFn ? `<button class="cards-error-retry" type="button">Try again</button>` : ""}
+      </div>
+    </section>`;
+    if (retryFn) {
+      const btn = this.container.querySelector(".cards-error-retry");
+      if (btn) btn.addEventListener("click", retryFn);
+    }
+  }
+
+  renderEmpty() {
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head">
+        <h1>Simulations</h1>
+        <p>Model how changes to your digital presence influence different audiences.</p>
+      </header>
+      <div class="cards-empty">
+        <span>No simulation data yet. Run an audit to generate audience profiles and scenarios.</span>
+        <button class="cards-error-retry" type="button">Start onboarding</button>
+      </div>
+    </section>`;
+    const btn = this.container.querySelector(".cards-error-retry");
+    if (btn) btn.addEventListener("click", () => state.manager.switch("onboard"));
+  }
+
   render() {
-    const aud = state.audiences.length ? state.audiences : defaultAudiences();
+    const aud = state.audiences.length ? state.audiences : [];
     const ws = this.wsRows();
     const shift = this.shiftStats();
     const checks = ws.map((w, idx) => `<div class="sim-var-row">
@@ -1994,22 +2602,37 @@ class SimulationsMode {
         <span>Impact strength</span>
         <input type="range" min="1" max="10" value="${Math.max(4, 8 - idx)}">
       </div>
-      <span class="sim-tier">${idx % 2 ? "Medium" : "High"}</span>
     </div>`).join("");
-    const saved = state.simulations.map(s => `<div class="sim-saved-row">
-      <span>${esc(s.name || "Scenario")}</span>
-      <b>${Number(s.after_score || 0)} (${fmtDelta(s.delta)})</b>
-    </div>`).join("") || `<p class="muted">No saved scenarios yet.</p>`;
+    const saved = this.savedScenarios.length
+      ? this.savedScenarios.map(s => `<div class="sim-saved-row">
+          <span>${esc(s.name || "Scenario")}</span>
+          <b>${scorePct(s.after_score)} (${fmtDelta(s.delta)})</b>
+        </div>`).join("")
+      : `<p class="muted">No saved scenarios yet.</p>`;
+    const shiftSection = shift ? `<section class="route-card">
+        <h3>Projected perception shift</h3>
+        <div class="sim-shift">
+          <div><span>Before</span><b>${shift.before}</b></div>
+          <div><span>After</span><b>${shift.after}</b></div>
+          <div><span>Change</span><b class="${shift.cls}">${shift.delta}</b></div>
+        </div>
+      </section>` : `<section class="route-card">
+        <h3>Projected perception shift</h3>
+        <p class="muted">Evaluate a scenario to see projected perception shift.</p>
+      </section>`;
     this.container.innerHTML = `<section class="route-wrap">
-      <header class="route-head"><h1>Simulations</h1><p>Model how changes to your digital presence influence different audiences.</p></header>
+      <header class="route-head">
+        <h1>Simulations</h1>
+        <p>Model how changes to your digital presence influence different audiences.</p>
+      </header>
       <div class="route-row">
-        <button class="route-btn">Save scenario</button>
-        <button class="route-btn">History</button>
-        <button class="route-btn">Saved scenarios</button>
+        <button class="route-btn" disabled title="Coming soon">Save scenario</button>
+        <button class="route-btn" disabled title="Coming soon">History</button>
+        <button class="route-btn" disabled title="Coming soon">Saved scenarios</button>
       </div>
       <section class="route-card">
         <div class="route-form-row">
-          <input id="simName" placeholder="Scenario name" value="Identity uplift">
+          <input id="simName" placeholder="Describe your scenario…" value="">
           <select id="simAudience">${aud.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select>
         </div>
         <div class="sim-builder">${checks || "<p class='muted'>No workstreams loaded yet.</p>"}</div>
@@ -2019,15 +2642,13 @@ class SimulationsMode {
           <button class="route-btn" data-act="compare">Compare Last Two</button>
         </div>
         <div id="simResult" class="muted">Pick clusters, then evaluate.</div>
-      </section>
-      <section class="route-card">
-        <h3>Projected perception shift</h3>
-        <div class="sim-shift">
-          <div><span>Before</span><b>${shift.before}</b></div>
-          <div><span>After</span><b>${shift.after}</b></div>
-          <div><span>Change</span><b class="${shift.cls}">${shift.delta}</b></div>
+        <div id="simEvalLoading" class="cards-loading" style="display:none">
+          <span class="pulse-dot"></span>
+          <span>Evaluating scenario…</span>
         </div>
+        <div id="simEvalError" class="cards-error-msg" style="display:none"></div>
       </section>
+      ${shiftSection}
       <section class="route-card">
         <h3>Saved scenarios</h3>${saved}
       </section>
@@ -2049,10 +2670,39 @@ class SimulationsMode {
     };
   }
 
+  setEvalLoading(loading) {
+    const spinner = this.container?.querySelector("#simEvalLoading");
+    const result = this.container?.querySelector("#simResult");
+    const errEl = this.container?.querySelector("#simEvalError");
+    if (spinner) spinner.style.display = loading ? "" : "none";
+    if (result) result.style.display = loading ? "none" : "";
+    if (errEl) errEl.style.display = "none";
+  }
+
+  showEvalError(msg) {
+    const errEl = this.container?.querySelector("#simEvalError");
+    const result = this.container?.querySelector("#simResult");
+    const spinner = this.container?.querySelector("#simEvalLoading");
+    if (spinner) spinner.style.display = "none";
+    if (result) result.style.display = "none";
+    if (errEl) {
+      errEl.style.display = "";
+      errEl.textContent = `Evaluation failed: ${msg}`;
+    }
+  }
+
   showEval(rec, extra = "") {
-    const out = this.container.querySelector("#simResult");
+    const out = this.container?.querySelector("#simResult");
+    const errEl = this.container?.querySelector("#simEvalError");
+    const spinner = this.container?.querySelector("#simEvalLoading");
+    if (spinner) spinner.style.display = "none";
+    if (errEl) errEl.style.display = "none";
     if (!out) return;
-    out.innerHTML = `Before: <b>${rec.before_score}</b> → After: <b>${rec.after_score}</b> (${fmtDelta(rec.delta)}) · CI ${rec.confidence_interval.low}-${rec.confidence_interval.high} ${extra}`;
+    out.style.display = "";
+    const ci = rec.confidence_interval
+      ? `${rec.confidence_interval.low}-${rec.confidence_interval.high}`
+      : "—";
+    out.innerHTML = `Before: <b>${rec.before_score}</b> → After: <b>${rec.after_score}</b> (${fmtDelta(rec.delta)}) · CI ${ci} ${extra}`;
   }
 
   async click(ev) {
@@ -2060,33 +2710,57 @@ class SimulationsMode {
     if (!btn) return;
     const act = btn.dataset.act;
     if (act === "eval") {
-      const out = await postJson("/api/simulations/evaluate", this.payload());
-      this.lastEval = out.scenario;
-      this.showEval(out.scenario);
+      const p = this.payload();
+      this.setEvalLoading(true);
+      try {
+        const out = await postJson(
+          `/api/v1/simulate/${encodeURIComponent(p.audience_id)}`, p);
+        this.lastEval = out.scenario;
+        this.setEvalLoading(false);
+        // update the shift section too
+        this.render();
+        this.showEval(out.scenario);
+      } catch (err) {
+        this.setEvalLoading(false);
+        this.showEvalError(apiMsg(err));
+      }
       return;
     }
     if (act === "save") {
-      const out = await postJson("/api/simulations/save", this.payload());
-      this.lastEval = out.scenario;
-      await refreshSimulations(true);
-      this.render();
-      this.showEval(out.scenario, "· saved");
+      this.setEvalLoading(true);
+      try {
+        const out = await postJson("/api/v1/simulations", this.payload());
+        this.lastEval = out.scenario;
+        await this.fetchScenarios();
+        this.setEvalLoading(false);
+        this.render();
+        this.showEval(out.scenario, "· saved");
+      } catch (err) {
+        this.setEvalLoading(false);
+        this.showEvalError(apiMsg(err));
+      }
       return;
     }
     if (act === "compare") {
-      if (state.simulations.length < 2) {
+      const scenarios = this.savedScenarios;
+      if (scenarios.length < 2) {
         const out = this.container.querySelector("#simResult");
         if (out) out.textContent = "Need at least two saved scenarios to compare.";
         return;
       }
-      const a = state.simulations[0];
-      const b = state.simulations[1];
-      const out = await postJson("/api/simulations/compare", {
-        left_id: a.id, right_id: b.id,
-      });
-      const msg = `Compare ${a.name} vs ${b.name}: ${fmtDelta(out.delta.delta)} (${out.delta.before_score}→${out.delta.after_score})`;
-      const box = this.container.querySelector("#simResult");
-      if (box) box.textContent = msg;
+      const a = scenarios[0];
+      const b = scenarios[1];
+      try {
+        const out = await postJson("/api/simulations/compare", {
+          left_id: a.id, right_id: b.id,
+        });
+        const msg = `Compare ${a.name} vs ${b.name}: ${fmtDelta(out.delta.delta)} (${out.delta.before_score}→${out.delta.after_score})`;
+        const box = this.container.querySelector("#simResult");
+        if (box) box.textContent = msg;
+      } catch (err) {
+        const box = this.container.querySelector("#simResult");
+        if (box) box.textContent = `Compare failed: ${apiMsg(err)}`;
+      }
     }
   }
 
@@ -2099,12 +2773,35 @@ class ExportsMode {
   constructor() {
     this.container = null;
     this.onClick = ev => this.click(ev);
+    this.formats = [];
+    this.history = [];
+    this.loading = true;
+    this.error = null;
+    this.exporting = false;
   }
 
   async mount(container) {
     this.container = container;
-    await Promise.all([refreshSettings(), this.refreshHistory()]);
-    this.render();
+    this.loading = true;
+    this.error = null;
+    this.renderLoading();
+    try {
+      const data = await getJson("/api/v1/exports");
+      this.formats = Array.isArray(data?.formats) ? data.formats : [];
+      this.history = Array.isArray(data?.history) ? data.history : [];
+      this.loading = false;
+      if (!this.formats.length) {
+        this.renderEmpty();
+        return;
+      }
+      this.render();
+    } catch (err) {
+      this.loading = false;
+      this.error = apiMsg(err);
+      this.formats = [];
+      this.history = [];
+      this.renderError(this.error, () => this.mount(this.container));
+    }
     this.container.addEventListener("click", this.onClick);
   }
 
@@ -2113,70 +2810,92 @@ class ExportsMode {
     if (this.container) this.container.innerHTML = "";
   }
 
-  async refreshHistory() {
-    try {
-      const out = await getJson("/api/exports/history");
-      this.history = Array.isArray(out?.items) ? out.items : [];
-    } catch (_) {
-      this.history = [];
+  renderLoading() {
+    if (!this.container) return;
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head"><h1>Exports</h1><p>Create and share reports, datasets, and analysis packages.</p></header>
+      <section class="exp-type-grid">
+        ${[0,1,2,3].map(() => `<div class="exp-type-card skeleton-pulse">
+          <div class="skeleton-block" style="width:60%;height:18px;margin-bottom:6px"></div>
+          <div class="skeleton-block" style="width:90%;height:12px"></div>
+        </div>`).join("")}
+      </section>
+      <section class="route-card skeleton-pulse">
+        <div class="skeleton-block" style="width:40%;height:20px;margin-bottom:12px"></div>
+        <div class="skeleton-block" style="width:100%;height:14px;margin-bottom:6px"></div>
+        <div class="skeleton-block" style="width:80%;height:14px"></div>
+      </section>
+    </section>`;
+  }
+
+  renderError(msg, retryFn) {
+    if (!this.container) return;
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head"><h1>Exports</h1><p>Create and share reports, datasets, and analysis packages.</p></header>
+      <div class="cards-error">
+        <div class="cards-error-icon">⚠️</div>
+        <p class="cards-error-msg">${esc(msg)}</p>
+        ${retryFn ? `<button class="cards-error-retry" type="button">Try again</button>` : ""}
+      </div>
+    </section>`;
+    if (retryFn) {
+      const btn = this.container.querySelector(".cards-error-retry");
+      if (btn) btn.addEventListener("click", retryFn);
     }
   }
 
-  render() {
-    const red = !!(state.settings?.privacy?.redact_exports ?? true);
-    const cards = [
-      ["report", "Executive Report (PDF)",
-        "Comprehensive narrative report with visuals and key insights."],
-      ["audience", "Audience Snapshot",
-        "Tailored summary for a specific audience perspective."],
-      ["datapack", "Data Package (JSON)",
-        "Raw signals and entities for technical consumption."],
-      ["workstreams", "CSV Findings",
-        "Structured findings for analysis in spreadsheets."],
-    ].map(([id, title, sub], idx) => `<label class="exp-type-card${
-      idx === 0 ? " active" : ""}">
-      <input type="radio" name="expType" value="${id}"${
-      idx === 0 ? " checked" : ""}>
-      <div><b>${title}</b><p>${sub}</p></div>
-    </label>`).join("");
-    const rows = (this.history || []).map(r => `<div class="sim-saved-row">
-      <span>${esc(r.kind)} · ${esc(String(r.run || "latest"))}</span>
-      <b>${humanSize(Number(r.bytes || 0))}</b>
-    </div>`).join("") || `<p class="muted">No exports yet.</p>`;
+  renderEmpty() {
+    if (!this.container) return;
     this.container.innerHTML = `<section class="route-wrap">
       <header class="route-head"><h1>Exports</h1><p>Create and share reports, datasets, and analysis packages.</p></header>
-      <section class="exp-type-grid">${cards}</section>
+      <div class="cards-empty">
+        <span>No export formats available. Run a scan to generate reports you can export.</span>
+        <button class="cards-error-retry" type="button">Start onboarding</button>
+      </div>
+    </section>`;
+    const btn = this.container.querySelector(".cards-error-retry");
+    if (btn) btn.addEventListener("click", () => state.manager.switch("onboard"));
+  }
+
+  render() {
+    const cards = this.formats.map((f, idx) => `<label class="exp-type-card${
+      idx === 0 ? " active" : ""}">
+      <input type="radio" name="expType" value="${esc(f.id)}"${
+      idx === 0 ? " checked" : ""}>
+      <div><b>${esc(f.title)}</b><p>${esc(f.subtitle)}</p></div>
+    </label>`).join("");
+
+    const rows = (this.history || []).map(r => `<div class="sim-saved-row">
+      <span>${esc(r.kind || r.format || "export")} · ${esc(String(r.run || "latest"))}</span>
+      <b>${humanSize(Number(r.bytes || 0))}</b>
+    </div>`).join("") || `<p class="muted">No exports yet.</p>`;
+
+    const errorHtml = this.error ? `<section class="route-card exp-error-card">
+      <p>⚠ ${esc(this.error)}</p>
+      <button class="route-btn route-btn--sm" data-act="retry">Retry</button>
+    </section>` : "";
+
+    const activeFormat = this.formats[0];
+    const previewLabel = activeFormat ? esc(activeFormat.title) : "Report";
+
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head"><h1>Exports</h1><p>Create and share reports, datasets, and analysis packages.</p></header>
+      ${errorHtml}
+      <section class="exp-type-grid">${cards || "<p class='muted'>No export formats available.</p>"}</section>
       <section class="exp-grid">
       <section class="route-card">
         <h3>Export configuration</h3>
         <div class="route-form-row">
-          <select id="expKind">
-            <option value="report">Report</option>
-            <option value="workstreams">Workstreams</option>
-            <option value="graph">Graph</option>
-            <option value="datapack">Data Pack</option>
-          </select>
           <input id="expDest" placeholder="Destination folder (optional)">
         </div>
         <div class="route-form-row">
-          <label class="sim-check"><input type="checkbox" id="expRedact"${red ? " checked" : ""}><span>Redact sensitive patterns</span></label>
+          <label class="sim-check"><input type="checkbox" id="expRedact"><span>Redact sensitive patterns</span></label>
           <label class="sim-check"><input type="checkbox" id="expAllow"><span>Allow risky export</span></label>
-        </div>
-        <div class="route-card">
-          <h3>Included modules</h3>
-          <div class="rail-chip-row">
-            <span class="rail-chip">Identity universe</span>
-            <span class="rail-chip">Iris insights</span>
-            <span class="rail-chip">Audience views</span>
-            <span class="rail-chip">Evidence samples</span>
-            <span class="rail-chip">Activity timeline</span>
-          </div>
         </div>
       </section>
       <section class="route-card">
         <div class="route-card-head">
-          <h3>Preview — Executive Report (PDF)</h3>
-          <button class="route-btn route-btn--sm">Full preview</button>
+          <h3>Preview — ${previewLabel}</h3>
         </div>
         <div class="exp-preview">
           <div class="exp-preview-head">Optic · Your Digital Identity Report</div>
@@ -2189,19 +2908,18 @@ class ExportsMode {
           </div>
         </div>
         <div class="route-row">
-          <button class="route-cta" data-act="export">Generate Export</button>
-          <button class="route-btn" data-act="refresh">Refresh History</button>
+          <button class="route-cta" data-act="export"${this.exporting ? " disabled" : ""}>${
+            this.exporting ? "Exporting…" : "Generate Export"}</button>
+          <button class="route-btn" data-act="refresh"${this.loading ? " disabled" : ""}>Refresh History</button>
         </div>
-        <div id="expMsg" class="muted">Ready.</div>
+        <div id="expMsg" class="muted">${this.exporting ? "Exporting…" : "Ready."}</div>
       </section>
       </section>
       <section class="route-card"><h3>Export history</h3>${rows}</section>
     </section>`;
+
     this.container.querySelectorAll("input[name='expType']").forEach(r => {
       r.addEventListener("change", () => {
-        const v = r.value;
-        const kind = this.container.querySelector("#expKind");
-        if (kind) kind.value = v === "audience" ? "report" : v;
         this.container.querySelectorAll(".exp-type-card").forEach(card => {
           card.classList.toggle("active", card.contains(r) && r.checked);
         });
@@ -2212,34 +2930,94 @@ class ExportsMode {
   async click(ev) {
     const btn = ev.target.closest("button[data-act]");
     if (!btn) return;
-    if (btn.dataset.act === "refresh") {
-      await this.refreshHistory();
+
+    if (btn.dataset.act === "retry") {
+      this.loading = true;
+      this.error = null;
+      this.renderLoading();
+      try {
+        const data = await getJson("/api/v1/exports");
+        this.formats = Array.isArray(data?.formats) ? data.formats : [];
+        this.history = Array.isArray(data?.history) ? data.history : [];
+        this.loading = false;
+      } catch (err) {
+        this.loading = false;
+        this.error = apiMsg(err);
+      }
       this.render();
       return;
     }
+
+    if (btn.dataset.act === "refresh") {
+      this.loading = true;
+      this.render();
+      try {
+        const data = await getJson("/api/v1/exports");
+        this.formats = Array.isArray(data?.formats) ? data.formats : [];
+        this.history = Array.isArray(data?.history) ? data.history : [];
+        this.loading = false;
+      } catch (err) {
+        this.loading = false;
+        this.error = apiMsg(err);
+      }
+      this.render();
+      return;
+    }
+
     if (btn.dataset.act !== "export") return;
-    const kind = this.container.querySelector("#expKind")?.value || "report";
+
+    const checkedRadio = this.container.querySelector("input[name='expType']:checked");
+    const fmt = checkedRadio?.value || this.formats[0]?.id || "report";
     const dest = this.container.querySelector("#expDest")?.value || "";
     const redact = !!this.container.querySelector("#expRedact")?.checked;
     const allow = !!this.container.querySelector("#expAllow")?.checked;
-    const msg = this.container.querySelector("#expMsg");
-    if (msg) msg.textContent = "Exporting…";
+
+    this.exporting = true;
+    this.render();
+
     try {
-      const out = await postJson("/api/exports", {
-        run: state.run, kind, dest_dir: dest, redact, allow_risky: allow,
+      const out = await postJson(`/api/v1/export/${encodeURIComponent(fmt)}`, {
+        run: state.run, dest_dir: dest, redact, allow_risky: allow,
       });
-      await this.refreshHistory();
+      this.exporting = false;
+      try {
+        const data = await getJson("/api/v1/exports");
+        this.history = Array.isArray(data?.history) ? data.history : [];
+      } catch (_) { console.warn("Failed to load export history:", _); }
       this.render();
       const next = this.container.querySelector("#expMsg");
-      if (next) next.textContent = `Saved: ${out.export.path}`;
+      if (next) next.textContent = `Saved: ${esc(out?.export?.path || "export complete")}`;
     } catch (err) {
-      if (msg) msg.textContent = `Export failed: ${apiMsg(err)}`;
+      this.exporting = false;
+      this.render();
+      const next = this.container.querySelector("#expMsg");
+      if (next) next.textContent = `Export failed: ${apiMsg(err)}`;
     }
   }
 
   onSearch() {}
   onKey() {}
   draw() {}
+}
+
+function integrationChips(intgCfg) {
+  if (!intgCfg || typeof intgCfg !== "object") return `<span class="rail-chip muted">No integrations configured</span>`;
+  const chips = [];
+  const channels = intgCfg.channels || {};
+  if (channels.storage?.enabled) chips.push(`${channels.storage.provider || "Storage"}`);
+  if (channels.chatops?.enabled) chips.push(`${channels.chatops.provider || "ChatOps"}`);
+  if (channels.calendar?.enabled) chips.push(`${channels.calendar.provider || "Calendar"}`);
+  if (channels.crm?.enabled) chips.push(`${channels.crm.provider || "CRM"}`);
+  if (intgCfg.email?.enabled) chips.push("Email");
+  if (intgCfg.social?.enabled) chips.push("Social");
+  if (intgCfg.webhooks?.enabled) chips.push("Webhooks");
+  if (!chips.length) {
+    const providerMode = intgCfg.provider_mode || "ollama";
+    const model = intgCfg.chat_model || intgCfg.infer_model || "";
+    if (model) chips.push(`${providerMode}:${model}`);
+    else chips.push(`${providerMode} (no model)`);
+  }
+  return chips.map(c => `<span class="rail-chip">${esc(c)}</span>`).join("");
 }
 
 class SettingsMode {
@@ -2255,27 +3033,42 @@ class SettingsMode {
     this.syncState = null;
     this.billing = null;
     this.usage = null;
+    this.v1Settings = null;
+    this.loading = true;
+    this.error = null;
+    this.fetchError = null;
     this.onClick = ev => this.click(ev);
   }
 
   async mount(container) {
     this.container = container;
-    await Promise.all([
-      refreshSettings(true),
-      refreshStatus(true),
-      this.refreshOps(),
-      this.refreshBackups(),
-      this.refreshWorkspace(),
-      this.refreshMembers(),
-      this.refreshInvites(),
-      this.refreshIntegrations(),
-      this.refreshJobs(),
-      this.refreshOauthEvents(),
-      this.refreshConnections(),
-      this.refreshSyncState(),
-      this.refreshBilling(),
-      this.refreshUsage(),
-    ]);
+    this.loading = true;
+    this.error = null;
+    this.fetchError = null;
+    this.renderLoading();
+    try {
+      await Promise.all([
+        refreshSettings(true),
+        refreshStatus(true),
+        this.refreshV1Settings(),
+        this.refreshOps(),
+        this.refreshBackups(),
+        this.refreshWorkspace(),
+        this.refreshMembers(),
+        this.refreshInvites(),
+        this.refreshIntegrations(),
+        this.refreshJobs(),
+        this.refreshOauthEvents(),
+        this.refreshConnections(),
+        this.refreshSyncState(),
+        this.refreshBilling(),
+        this.refreshUsage(),
+      ]);
+      this.loading = false;
+    } catch (err) {
+      this.loading = false;
+      this.fetchError = apiMsg(err) || "Failed to load settings data.";
+    }
     this.render();
     this.container.addEventListener("click", this.onClick);
   }
@@ -2384,8 +3177,42 @@ class SettingsMode {
     }
   }
 
+  async refreshV1Settings() {
+    try {
+      const data = await getJson("/api/v1/settings");
+      this.v1Settings = data?.settings || null;
+    } catch (_) {
+      this.v1Settings = null;
+    }
+  }
+
+  renderLoading() {
+    if (!this.container) return;
+    this.container.innerHTML = `<section class="route-wrap">
+      <header class="route-head"><h1>Settings</h1><p>Loading configuration…</p></header>
+      <section class="route-card">
+        <div class="loading-spinner" style="display:flex;align-items:center;gap:12px;padding:24px 0">
+          <span class="pulse-dot"></span>
+          <span class="muted">Fetching settings from server…</span>
+        </div>
+      </section>
+    </section>`;
+  }
+
   render() {
-    const set = state.settings || {};
+    if (this.loading) { this.renderLoading(); return; }
+    if (this.fetchError) {
+      this.container.innerHTML = `<section class="route-wrap">
+        <header class="route-head"><h1>Settings</h1><p>Could not load settings</p></header>
+        <section class="route-card">
+          <p class="err-msg">${esc(this.fetchError)}</p>
+          <button class="route-btn" data-act="retry">Retry</button>
+        </section>
+      </section>`;
+      return;
+    }
+    const set = state.settings || this.v1Settings || {};
+    const intgCfg = set.integrations || {};
     const scan = set.scan_rules || {};
     const prv = set.privacy || {};
     const intg = this.integrations?.integrations || {};
@@ -2456,7 +3283,7 @@ class SettingsMode {
         <h3>Profile & account</h3>
         <div class="route-form-row">
           <input id="setName" placeholder="Display name"
-            value="${esc(set.profile?.display_name || "Alex Morgan")}">
+            value="${esc(set.profile?.display_name || "")}">
           <input id="setDays" type="number" min="1" max="365"
             value="${Number(set.profile?.session_days || 30)}">
         </div>
@@ -2473,11 +3300,8 @@ class SettingsMode {
         </div>
         <div class="route-card">
           <h3>Integrations</h3>
-          <div class="rail-chip-row">
-            <span class="rail-chip">iCloud Drive</span>
-            <span class="rail-chip">Google Drive</span>
-            <span class="rail-chip">Slack</span>
-            <span class="rail-chip">GitHub</span>
+          <div class="rail-chip-row" id="settingsIntelChips">
+            ${integrationChips(intgCfg)}
           </div>
         </div>
         <div class="route-row">
@@ -2488,7 +3312,29 @@ class SettingsMode {
       <section class="route-card">
         <h3>System health</h3>
         <p class="muted">Runs: ${Number(ops?.index?.runs_total || 0)} · Latest: ${esc(ops?.index?.latest_run || "none")} · Queue: ${Number(ops?.index?.status?.queue_depth || 0)}</p>
-        <p class="muted">Storage free: ${humanSize(Number(ops?.storage?.free_bytes || 0))} · Model: ${esc(ops?.model?.model || "")}</p>
+        <p class="muted">Storage free: ${humanSize(Number(ops?.storage?.free_bytes || 0))} · Model: ${esc(intgCfg.chat_model || intgCfg.infer_model || ops?.model?.model || "not configured")}</p>
+      </section>
+      <section class="route-card">
+        <h3>LLM runtime</h3>
+        <div class="route-form-row">
+          <select id="setProviderMode">
+            ${["ollama","mirofish","openai","anthropic"].map(p => `<option value="${p}"${String(intgCfg.provider_mode || "ollama") === p ? " selected" : ""}>${p}</option>`).join("")}
+          </select>
+          <input id="setOllamaUrl" placeholder="Ollama URL"
+            value="${esc(intgCfg.ollama_url || "http://localhost:11434")}">
+        </div>
+        <div class="route-form-row">
+          <input id="setChatModel" placeholder="Chat model"
+            value="${esc(intgCfg.chat_model || "")}">
+          <input id="setInferModel" placeholder="Inference model"
+            value="${esc(intgCfg.infer_model || "")}">
+          <input id="setIrisModel" placeholder="Iris model"
+            value="${esc(intgCfg.iris_model || "")}">
+        </div>
+        <div class="route-row">
+          <button class="route-btn" data-act="saveLlm">Save LLM config</button>
+        </div>
+        <div id="setLlmMsg" class="muted">${intgCfg.chat_model ? `Active: ${esc(intgCfg.chat_model)}` : "No model configured."}</div>
       </section>
       <section class="route-card">
         <h3>Workspace</h3>
@@ -3183,8 +4029,7 @@ class SettingsMode {
     }
     if (act === "queueDigest") {
       try {
-        const to = this.container.querySelector("#intFromEmail")?.value ||
-          "team@local";
+        const to = this.container.querySelector("#intFromEmail")?.value || "";
         const rep = state.report || await refreshReport(true);
         const corpus = rep?.corpus || {};
         const topWs = (state.workstreams || []).slice(0, 3)
@@ -3228,7 +4073,7 @@ class SettingsMode {
         const files = Number(rep?.corpus?.total_files || state.nodes.length || 0);
         const topAud = (state.audiences && state.audiences.length) ?
           state.audiences[0] : null;
-        const sig = topAud ? `${topAud.name}: ${Number(topAud.score || 0)}%` :
+        const sig = topAud ? `${topAud.name}: ${scorePct(topAud.score)}` :
           "signal baseline pending";
         const content = `Optic update: ${files.toLocaleString()} files indexed. ` +
           `${sig}. Run ${state.run || "latest"}.`;
@@ -3463,6 +4308,50 @@ class SettingsMode {
       });
       await refreshHomeData(true);
       if (msg) msg.textContent = "Home summary reset.";
+      return;
+    }
+    if (act === "retry") {
+      this.loading = true;
+      this.fetchError = null;
+      this.renderLoading();
+      try {
+        await Promise.all([
+          refreshSettings(true),
+          this.refreshV1Settings(),
+        ]);
+        this.loading = false;
+      } catch (err) {
+        this.loading = false;
+        this.fetchError = apiMsg(err) || "Failed to load settings data.";
+      }
+      this.render();
+      return;
+    }
+    if (act === "saveLlm") {
+      try {
+        const providerMode = this.container.querySelector("#setProviderMode")?.value || "ollama";
+        const ollamaUrl = this.container.querySelector("#setOllamaUrl")?.value || "";
+        const chatModel = this.container.querySelector("#setChatModel")?.value || "";
+        const inferModel = this.container.querySelector("#setInferModel")?.value || "";
+        const irisModel = this.container.querySelector("#setIrisModel")?.value || "";
+        await postJson("/api/integrations/state", {
+          integrations: {
+            provider_mode: providerMode,
+            ollama_url: ollamaUrl,
+            chat_model: chatModel,
+            infer_model: inferModel,
+            iris_model: irisModel,
+          },
+        });
+        await refreshSettings(true);
+        await this.refreshIntegrations();
+        this.render();
+        const llmMsg = this.container.querySelector("#setLlmMsg");
+        if (llmMsg) llmMsg.textContent = chatModel ? `Saved. Active: ${chatModel}` : "LLM config saved.";
+      } catch (err) {
+        const llmMsg = this.container.querySelector("#setLlmMsg");
+        if (llmMsg) llmMsg.textContent = `Save failed: ${apiMsg(err)}`;
+      }
     }
   }
 
@@ -3475,285 +4364,6 @@ function fmtDelta(v) {
   const n = Number(v || 0);
   const s = n > 0 ? "+" : "";
   return `${s}${n}`;
-}
-
-// ─── OnboardMode ──────────────────────────────────────────────────────────────
-
-const DEFAULT_FOLDERS = [
-  { name: "Desktop", checked: true },
-  { name: "Documents", checked: true },
-  { name: "Downloads", checked: true },
-  { name: "Screenshots", checked: true },
-  { name: "Music", checked: false },
-  { name: "Movies", checked: false },
-];
-
-class OnboardMode {
-  constructor() {
-    this.container = null;
-    this.scanning = false;
-    this.pollId = null;
-    this.pollBusy = false;
-  }
-
-  mount(container) {
-    this.container = container;
-    this.render();
-  }
-
-  unmount() {
-    this.stopPoll();
-    if (this.container) this.container.innerHTML = "";
-  }
-
-  render() {
-    this.container.innerHTML = `
-      <div class="onboard">
-        <div class="onboard-logo">Optic</div>
-        <h2>What should Optic analyze?</h2>
-        <div class="folder-grid" id="folderGrid">
-          ${DEFAULT_FOLDERS.map(f => `
-            <label class="folder-check${f.checked ? " checked" : ""}">
-              <input type="checkbox" value="${esc(f.name)}"${f.checked ? " checked" : ""}>
-              ${f.checked ? "☑" : "☐"} ${esc(f.name)}
-            </label>`).join("")}
-        </div>
-        <label class="folder-check" id="addCustom" style="margin-bottom:16px;border-style:dashed">
-          + Add custom folder...
-        </label>
-        <button class="scan-btn" id="startScan">Start Analysis →</button>
-        <p class="privacy-note">Optic runs entirely on your Mac.<br>Nothing leaves your device.</p>
-        <div id="scanStatus" class="scan-status" hidden>
-          <span class="pulse-dot"></span>
-          <span id="scanStatusText">Analyzing your files…</span>
-        </div>
-      </div>`;
-
-    // Toggle checked state on folder labels
-    this.container.querySelectorAll(".folder-check input").forEach(inp => {
-      this.bindFolderInput(inp);
-    });
-
-    this.container.querySelector("#addCustom").addEventListener("click", ev => {
-      ev.preventDefault();
-      this.addCustomFolder();
-    });
-
-    this.container.querySelector("#startScan").addEventListener("click", () => {
-      this.startScan();
-    });
-  }
-
-  bindFolderInput(inp) {
-    inp.addEventListener("change", () => this.syncFolderLabel(inp));
-  }
-
-  syncFolderLabel(inp) {
-    const label = inp.closest(".folder-check");
-    if (!label) return;
-    label.classList.toggle("checked", inp.checked);
-    label.textContent = `${inp.checked ? "☑" : "☐"} ${inp.value}`;
-    label.prepend(inp);
-  }
-
-  addCustomFolder() {
-    const raw = window.prompt("Enter folder path to analyze:", "");
-    const path = String(raw || "").trim();
-    if (!path) return;
-    const dup = [...this.container.querySelectorAll(".folder-check input")]
-      .some(inp => inp.value === path);
-    if (dup) return this.showStatus(`Folder already added: ${path}`, false, true);
-    const label = document.createElement("label");
-    const inp = document.createElement("input");
-    label.className = "folder-check checked";
-    inp.type = "checkbox";
-    inp.checked = true;
-    inp.value = path;
-    label.append(inp, `☑ ${path}`);
-    this.container.querySelector("#folderGrid").append(label);
-    this.bindFolderInput(inp);
-    this.showStatus(`Added folder: ${path}`, false, false);
-  }
-
-  selectedFolders() {
-    const home = state.home || "/Users/" +
-      (document.cookie.match(/user=([^;]+)/) || ["", ""])[1];
-    const rows = [...this.container.querySelectorAll(".folder-check input:checked")]
-      .map(inp => {
-        const v = inp.value;
-        // Map friendly names to absolute macOS paths
-        if (v === "Screenshots") return `${home}/Pictures/Screenshots`;
-        if (v === "Desktop")   return `${home}/Desktop`;
-        if (v === "Documents") return `${home}/Documents`;
-        if (v === "Downloads") return `${home}/Downloads`;
-        if (v === "Music")     return `${home}/Music`;
-        if (v === "Movies")    return `${home}/Movies`;
-        // Already absolute or custom path
-        return v.startsWith("/") ? v : `${home}/${v}`;
-      });
-    return [...new Set(rows)];
-  }
-
-  async startScan() {
-    if (this.scanning) return;
-    const folders = this.selectedFolders();
-    if (!folders.length) {
-      this.showStatus("Select at least one folder to analyze.", false, true);
-      return;
-    }
-    const btn = this.container.querySelector("#startScan");
-    this.scanning = true;
-    btn.disabled = true;
-    btn.textContent = "Starting…";
-    this.showStatus("Starting analysis…", true, false);
-
-    try {
-      await postJson("/api/scan", { folders });
-      btn.textContent = "Scan running…";
-      this.showStatus("Analyzing your files…", true, false);
-      this.pollScan();
-    } catch (err) {
-      if (apiCode(err) === "scan_already_running") {
-        btn.textContent = "Scan in progress…";
-        this.showStatus("Scan already running. Tracking status…", true, false);
-        this.pollScan();
-        return;
-      }
-      this.failScan(apiMsg(err));
-    }
-  }
-
-  pollScan(delay = 900) {
-    this.stopPoll();
-    this.pollId = setTimeout(() => this.tickScan(), delay);
-  }
-
-  async tickScan() {
-    if (!this.scanning || this.pollBusy) return;
-    this.pollBusy = true;
-    try {
-      const st = await getJson("/api/status");
-      const txt = this.scanStatusText(st);
-      this.showStatus(txt, st.scanning !== false, false);
-      if (st.scanning) this.pollScan(1200);
-      else if (this.scanFailed(st)) this.failScanStatus(st);
-      else await this.finishScan(st);
-    } catch (_) {
-      this.showStatus("Waiting for scan status…", true, false);
-      this.pollScan(2000);
-    } finally {
-      this.pollBusy = false;
-    }
-  }
-
-  async finishScan(st) {
-    this.stopPoll();
-    this.scanning = false;
-    const btn = this.container.querySelector("#startScan");
-    btn.disabled = false;
-    btn.textContent = "Start Analysis →";
-    let msg = st?.last_run ? `Run ready: ${st.last_run}` : "Analysis complete";
-    const runId = st?.last_run ? String(st.last_run) : "";
-    if (runId) {
-      try {
-        const rep = await getJson(`/api/report?run=${encodeURIComponent(runId)}`);
-        const ws = Number(rep?.workstreams?.count || 0).toLocaleString();
-        const fs = Number(rep?.corpus?.total_files || 0).toLocaleString();
-        msg = `Run ready: ${runId} · ${ws} workstreams · ${fs} files`;
-      } catch (_) {}
-    }
-    this.showStatus(`${msg}. Loading workstreams…`, false, false);
-    setTimeout(() => state.manager.switch("workstreams"), 700);
-  }
-
-  failScan(err) {
-    this.stopPoll();
-    this.scanning = false;
-    const btn = this.container.querySelector("#startScan");
-    btn.disabled = false;
-    btn.textContent = "Start Analysis →";
-    this.showStatus(`Could not start analysis: ${this.scanErr(err)}`,
-      false, true);
-  }
-
-  failScanStatus(st) {
-    this.stopPoll();
-    this.scanning = false;
-    const btn = this.container.querySelector("#startScan");
-    btn.disabled = false;
-    btn.textContent = "Start Analysis →";
-    const err = this.scanFailText(st);
-    this.showStatus(`Analysis failed: ${err}`, false, true);
-  }
-
-  scanErr(err) {
-    if (err === "folders_required") return "select at least one folder";
-    if (err === "scan_already_running") return "scan already running";
-    return String(err || "unknown error");
-  }
-
-  scanFailed(st) {
-    if (st?.scanning || st?.last_run) return false;
-    const p = st?.progress || {};
-    if (p.state === "dead") return true;
-    const fail = st?.recent_failure || {};
-    return !!(fail.err || p.stderr);
-  }
-
-  scanFailText(st) {
-    const p = st?.progress || {};
-    const fail = st?.recent_failure || {};
-    const raw = fail.err || p.stderr || p.state || "unknown_error";
-    const txt = String(raw).replace(/\s+/g, " ").trim();
-    return txt || "unknown_error";
-  }
-
-  scanStatusText(st) {
-    const p = st?.progress || {};
-    if (p.stage) {
-      const stage = String(p.stage).replace(/_/g, " ");
-      const stateTxt = String(p.stage_state || "");
-      if (stateTxt === "running") return `Pipeline: ${stage}…`;
-      if (stateTxt === "ok") return `Completed: ${stage}`;
-      if (stateTxt === "error") return `Failed at: ${stage}`;
-    }
-    if (p.state === "retrying") {
-      const n = num(p.attempts);
-      const wait = Number(p.retry_in_s || 0);
-      if (n && wait > 0) return `Retrying analysis (attempt ${n}) in ${wait}s…`;
-      if (n) return `Retrying analysis (attempt ${n})…`;
-      return "Retrying analysis…";
-    }
-    if (p.state === "dead") return "Analysis failed";
-    const pct = Number(p.pct ?? p.percent ?? p.progress);
-    if (Number.isFinite(pct) && pct >= 0) return `Analyzing… ${pct|0}%`;
-    const done = num(p.done ?? p.files_done ?? p.count);
-    const total = num(p.total ?? p.files_total);
-    if (done && total) return `Analyzing… ${done}/${total} files`;
-    if (done) return `Analyzing… ${done} files processed`;
-    if (st?.scanning) return "Analyzing your files…";
-    return "Scan complete";
-  }
-
-  showStatus(msg, busy, err) {
-    const box = this.container.querySelector("#scanStatus");
-    const dot = box.querySelector(".pulse-dot");
-    const txt = this.container.querySelector("#scanStatusText");
-    box.hidden = false;
-    txt.textContent = msg;
-    dot.style.display = busy ? "" : "none";
-    txt.style.color = err ? "#ff7f73" : "";
-  }
-
-  stopPoll() {
-    if (!this.pollId) return;
-    clearTimeout(this.pollId);
-    this.pollId = null;
-  }
-
-  onSearch() {}
-  onKey() {}
-  draw() {}
 }
 
 // ─── Helper: deterministic color per cluster id ───────────────────────────────
@@ -3917,30 +4527,64 @@ class CanvasMode {
 class TopologyMode extends CanvasMode {
   mount(canvas) {
     this.edgeSet = new Set();
-    this.edges = topEdges(300);
-    this.edges.forEach(l => this.edgeSet.add(`${l.a}:${l.b}`));
+    this.edges = [];
     this.hero = false;
-    this.heroHubs = [];
+    this.loading = true;
+    this.loadError = null;
+    this._loadingFrame = null;
     super.mount(canvas);
-    this.layout();
     this.mapTool = "pan";
     this.mountMapChrome();
+    this.loadEvidenceGraph();
+  }
+
+  async loadEvidenceGraph() {
+    const run = activeRun();
+    try {
+      const data = await getJson(`/api/graph?run=${encodeURIComponent(run)}`);
+      state.nodes = (data.nodes || []).map(normalNode);
+      state.links = (data.links || data.edges || []).map(normalLink);
+      state.nodeById = new Map(state.nodes.map(n => [n.id, n]));
+      attachDegrees();
+      syncSelected();
+    } catch (err) {
+      console.error("Failed to load evidence graph:", err);
+      this.loadError = err;
+    }
+    this.loading = false;
+    if (this._loadingFrame) {
+      cancelAnimationFrame(this._loadingFrame);
+      this._loadingFrame = null;
+    }
+    this.edges = topEdges(300);
+    this.edges.forEach(l => this.edgeSet.add(`${l.a}:${l.b}`));
+    this.layout();
+    this.draw();
   }
 
   unmount() {
+    if (this._loadingFrame) {
+      cancelAnimationFrame(this._loadingFrame);
+      this._loadingFrame = null;
+    }
     this.unmountMapChrome();
     this.clearClusterLabels();
     super.unmount();
     if (this.sim) this.sim.stop();
   }
 
-  layout() {
-    this.hero = this.shouldHeroMap();
-    if (this.hero) {
-      this.layoutHero();
+  down(ev) {
+    if (this.loadError) {
+      this.loadError = null;
+      this.loading = true;
       this.draw();
+      this.loadEvidenceGraph();
       return;
     }
+    super.down(ev);
+  }
+
+  layout() {
     // Use PCA x,y directly - semantically similar files are already near each other
     state.nodes.forEach(n => { n.x = n.pcaX; n.y = n.pcaY; });
     if (!window.d3) { this.seedFallback(); return; }
@@ -3967,75 +4611,6 @@ class TopologyMode extends CanvasMode {
       return;
     }
     super.onKey(ev);
-  }
-
-  shouldHeroMap() {
-    if (state.nodes.length === 0) return true;
-    return state.nodes.length <= 8 && uniqueClusters() < 2;
-  }
-
-  layoutHero() {
-    this.heroHubs = [
-      { key: "people", label: "People", x: -220, y: -120, color: "#8d63f7" },
-      { key: "projects", label: "Projects", x: -8, y: -142, color: "#4f86ef" },
-      { key: "documents", label: "Documents", x: 206, y: -14, color: "#25b8b5" },
-      { key: "skills", label: "Skills & Topics", x: -170, y: 36,
-        color: "#3dbf79" },
-      { key: "systems", label: "Systems", x: -22, y: 112, color: "#e0a53e" },
-      { key: "events", label: "Events", x: -166, y: 168, color: "#e95f9f" },
-      { key: "outcomes", label: "Outcomes", x: 210, y: 128, color: "#9a6cf9" },
-      { key: "locations", label: "Locations", x: 60, y: 214,
-        color: "#2fc9d5" },
-      { key: "strategy", label: "Project Strategy", x: 0, y: 0,
-        color: "#3b6ff0", core: true },
-    ];
-    const byKey = new Map(this.heroHubs.map(h => [h.key, h]));
-    const spread = ["projects", "people", "skills", "documents", "systems",
-      "events", "outcomes", "locations"];
-    state.nodes.forEach((n, idx) => {
-      let key = this.heroBucket(n);
-      if (key === "documents" && state.nodes.length < 140) {
-        key = spread[idx % spread.length];
-      }
-      const hub = byKey.get(key) || byKey.get("strategy");
-      const a = hash(`${n.id}:${idx}`);
-      const rr = hub.core ? 48 + (idx % 8) * 7 : 18 + (idx % 7) * 9;
-      n.x = hub.x + Math.cos(a) * rr;
-      n.y = hub.y + Math.sin(a) * rr * 0.75;
-      n.mapColor = hub.color;
-      n.mapHub = hub.key;
-    });
-    this.heroCloud = this.heroHubs.filter(h => !h.core).flatMap(h => {
-      const vals = [];
-      for (let i = 0; i < 75; i++) {
-        const a = hash(`${h.key}:dust:${i}`);
-        const t = (Math.sin(i * 17.3 + h.x * 0.01) + 1) * 0.5;
-        const rr = 20 + t * 96;
-        vals.push({
-          x: h.x + Math.cos(a) * rr,
-          y: h.y + Math.sin(a) * rr * 0.72,
-          r: 0.9 + t * 2.1,
-          a: 0.08 + t * 0.24,
-          color: h.color,
-        });
-      }
-      return vals;
-    });
-  }
-
-  heroBucket(n) {
-    const t = `${n.label || ""} ${n.path || ""}`.toLowerCase();
-    if (/(people|team|contact|persona|recruiter|audience)/.test(t)) {
-      return "people";
-    }
-    if (/(project|roadmap|plan|strategy|work)/.test(t)) return "projects";
-    if (/(doc|pdf|deck|notes|report|brief)/.test(t)) return "documents";
-    if (/(skill|topic|iris|insight|analysis)/.test(t)) return "skills";
-    if (/(system|config|index|state|json)/.test(t)) return "systems";
-    if (/(timeline|event|history|log|scan)/.test(t)) return "events";
-    if (/(output|result|goal|outcome|export)/.test(t)) return "outcomes";
-    if (/(city|location|map|travel|remote)/.test(t)) return "locations";
-    return "strategy";
   }
 
   seedFallback() {
@@ -4097,10 +4672,22 @@ class TopologyMode extends CanvasMode {
   }
 
   draw() {
+    if (this.loadError) {
+      this.drawErrorScreen();
+      return;
+    }
+    if (this.loading) {
+      this.drawLoadingScreen();
+      return;
+    }
+    if (!state.nodes.length) {
+      this.drawEmptyScreen();
+      return;
+    }
     syncSelected();
     const r = this.size();
     this.ctx.clearRect(0, 0, r.width, r.height);
-    if (this.hero) this.drawHeroBackdrop(r);
+    this.drawFrostBackdrop(r);
     this.drawClusterNebulae(r);
     this.drawFocusHalo();
     // Only draw edges when a node is selected or hovered — reduces spaghetti
@@ -4154,29 +4741,6 @@ class TopologyMode extends CanvasMode {
   }
 
   drawCentroids() {
-    if (this.hero) {
-      const ctx = this.ctx;
-      this.heroHubs.forEach(h => {
-        const s = this.screen(h);
-        const cnt = this.heroSignalCount(h);
-        const rr = h.core ? 38 : 16;
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.strokeStyle = `${h.color}80`;
-        ctx.lineWidth = h.core ? 3 : 2;
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, rr * this.cam.k, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = "#1a2444";
-        ctx.font = h.core ? "700 19px Sora, Manrope, sans-serif" :
-          "650 13px Sora, Manrope, sans-serif";
-        ctx.fillText(h.label, s.x + 16 * this.cam.k, s.y + 2);
-        ctx.fillStyle = "rgba(36,56,108,0.78)";
-        ctx.font = "500 11px Manrope, sans-serif";
-        ctx.fillText(`${cnt} signals`, s.x + 16 * this.cam.k, s.y + 19);
-      });
-      return;
-    }
     if (this.cam.k < 0.4) return;
     const ctx = this.ctx;
     const catCentroids = computeCategoryCentroids();
@@ -4230,7 +4794,6 @@ class TopologyMode extends CanvasMode {
   }
 
   drawLabels() {
-    if (this.hero) return;
     if (this.cam.k < 0.58) return;
     const r = this.canvas.getBoundingClientRect();
     if (!r.width || !r.height) return;
@@ -4331,7 +4894,7 @@ class TopologyMode extends CanvasMode {
   drawClusterNebulae() {
     const groups = new Map();
     for (const n of visibleNodes()) {
-      const id = n.mapHub || n.cluster || n.category || "other";
+      const id = n.cluster || n.category || "other";
       if (!groups.has(id)) groups.set(id, []);
       groups.get(id).push(n);
     }
@@ -4357,7 +4920,7 @@ class TopologyMode extends CanvasMode {
 
   drawFocusHalo() {
     const id = String(state.highlightCluster || "");
-    if (!id || this.hero) return;
+    if (!id) return;
     const vals = visibleNodes().filter(n => String(n.cluster || "") === id);
     if (vals.length < 2) return;
     const pts = vals.map(n => this.screen(n));
@@ -4393,7 +4956,6 @@ class TopologyMode extends CanvasMode {
   }
 
   renderClusterLabels() {
-    if (this.hero) return this.clearClusterLabels();
     const layer = ensureClusterLabelLayer();
     if (this.cam.k < 0.4) {
       layer.hidden = true;
@@ -4629,7 +5191,7 @@ class TopologyMode extends CanvasMode {
     return "Drag to pan · Scroll to zoom · Click to select";
   }
 
-  drawHeroBackdrop(r) {
+  drawFrostBackdrop(r) {
     const ctx = this.ctx;
     ctx.save();
     const gg = ctx.createLinearGradient(0, 0, 0, r.height);
@@ -4645,29 +5207,6 @@ class TopologyMode extends CanvasMode {
       ctx.arc(x, y, 1.2, 0, Math.PI * 2);
       ctx.fill();
     }
-    const links = [
-      ["people", "strategy"], ["projects", "strategy"], ["documents", "strategy"],
-      ["skills", "strategy"], ["systems", "strategy"], ["events", "strategy"],
-      ["outcomes", "strategy"], ["locations", "strategy"], ["people", "projects"],
-      ["documents", "outcomes"], ["skills", "systems"], ["events", "locations"],
-    ];
-    const by = new Map(this.heroHubs.map(h => [h.key, h]));
-    ctx.strokeStyle = "rgba(95,120,186,0.10)";
-    ctx.lineWidth = 1.1;
-    links.forEach(([a, b]) => {
-      const pa = this.screen(by.get(a));
-      const pb = this.screen(by.get(b));
-      line(ctx, pa.x, pa.y, pb.x, pb.y);
-    });
-    (this.heroCloud || []).forEach(dot => {
-      const p = this.screen(dot);
-      ctx.fillStyle = dot.color;
-      ctx.globalAlpha = dot.a;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, dot.r * this.cam.k, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.globalAlpha = 1;
     ctx.fillStyle = "#1b2446";
     ctx.font = "700 48px Sora, Manrope, sans-serif";
     ctx.fillText("Map", 36, 78);
@@ -4678,16 +5217,109 @@ class TopologyMode extends CanvasMode {
     ctx.restore();
   }
 
-  heroSignalCount(h) {
-    const own = state.nodes.filter(n => n.mapHub === h.key).length;
-    const base = Math.max(1, state.nodes.length);
-    const weights = {
-      people: 0.11, projects: 0.17, documents: 0.28, skills: 0.15,
-      systems: 0.10, events: 0.07, outcomes: 0.08, locations: 0.04,
-      strategy: 0.26,
-    };
-    const est = Math.round(base * (weights[h.key] || 0.1));
-    return Math.max(own, est);
+  drawLoadingScreen() {
+    const r = this.size();
+    const ctx = this.ctx;
+    ctx.save();
+    const gg = ctx.createLinearGradient(0, 0, 0, r.height);
+    gg.addColorStop(0, "#fbfcff");
+    gg.addColorStop(1, "#f5f8ff");
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    for (let i = 0; i < 18; i++) {
+      const x = ((i * 97) % Math.max(1, r.width - 80)) + 40;
+      const y = ((i * 53) % Math.max(1, r.height - 120)) + 60;
+      ctx.fillStyle = "rgba(75,112,203,0.05)";
+      ctx.beginPath();
+      ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#1b2446";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Map", 36, 78);
+    const t = Date.now() / 1000;
+    const dots = ".".repeat(1 + Math.floor((t * 2) % 4));
+    ctx.fillStyle = "rgba(47,63,108,0.78)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText(`Loading evidence graph${dots}`, 36, 108);
+    for (let i = 0; i < 12; i++) {
+      const cx = r.width / 2 + Math.cos(i * Math.PI / 6 + t * 0.6) * 140;
+      const cy = r.height / 2 + Math.sin(i * Math.PI / 6 + t * 0.6) * 90;
+      const alpha = 0.08 + Math.sin(t * 2 + i * 1.7) * 0.05;
+      const rr = 3 + Math.sin(t * 1.4 + i) * 2;
+      ctx.fillStyle = `rgba(75,112,203,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    this._loadingFrame = requestAnimationFrame(() => this.draw());
+  }
+
+  drawErrorScreen() {
+    const r = this.size();
+    const ctx = this.ctx;
+    ctx.save();
+    const gg = ctx.createLinearGradient(0, 0, 0, r.height);
+    gg.addColorStop(0, "#fbfcff");
+    gg.addColorStop(1, "#f5f8ff");
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Frost-glass grid
+    ctx.strokeStyle = "rgba(0,0,0,0.04)";
+    ctx.lineWidth = 0.5;
+    for (let x = 48; x < r.width; x += 90) line(ctx, x, 28, x, r.height - 58);
+    for (let y = 38; y < r.height - 58; y += 54) line(ctx, 38, y, r.width, y);
+    ctx.fillStyle = "#1b2446";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Map", 36, 78);
+    ctx.fillStyle = "rgba(47,63,108,0.78)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText("Could not load evidence graph.", 36, 108);
+    const msg = this.loadError?.message || String(this.loadError || "Unknown error");
+    ctx.fillStyle = "rgba(107,114,128,0.7)";
+    ctx.font = "13px system-ui";
+    ctx.fillText(msg.slice(0, 64), 36, 138);
+    ctx.fillStyle = "rgba(59,111,240,0.7)";
+    ctx.font = "500 14px system-ui";
+    ctx.fillText("Click to retry", 36, 168);
+    ctx.restore();
+  }
+
+  drawEmptyScreen() {
+    const r = this.size();
+    const ctx = this.ctx;
+    ctx.save();
+    const gg = ctx.createLinearGradient(0, 0, 0, r.height);
+    gg.addColorStop(0, "#fbfcff");
+    gg.addColorStop(1, "#f5f8ff");
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Frost-glass subtle grid
+    ctx.strokeStyle = "rgba(0,0,0,0.03)";
+    ctx.lineWidth = 0.5;
+    for (let x = 48; x < r.width; x += 90) line(ctx, x, 28, x, r.height - 58);
+    for (let y = 38; y < r.height - 58; y += 54) line(ctx, 38, y, r.width, y);
+    // Scattered faint dots — suggests waiting data
+    for (let i = 0; i < 14; i++) {
+      const x = ((i * 97) % Math.max(1, r.width - 80)) + 40;
+      const y = ((i * 53) % Math.max(1, r.height - 120)) + 60;
+      ctx.fillStyle = "rgba(75,112,203,0.04)";
+      ctx.beginPath();
+      ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#1b2446";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Map", 36, 78);
+    ctx.fillStyle = "rgba(47,63,108,0.78)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText("No evidence graph yet.", 36, 108);
+    ctx.fillStyle = "rgba(59,111,240,0.55)";
+    ctx.font = "500 14px system-ui";
+    ctx.fillText("Run a scan to populate the graph.", 36, 138);
+    ctx.restore();
+    drawCounts(0, 0);
   }
 
   wsEmoji(ws) {
@@ -4695,10 +5327,15 @@ class TopologyMode extends CanvasMode {
       .toLowerCase();
     if (text.includes("research") || text.includes("learning")) return "📚";
     if (text.includes("work") || text.includes("career")) return "💼";
-    if (text.includes("finance")) return "💳";
-    if (text.includes("social") || text.includes("people")) return "💬";
-    if (text.includes("photo") || text.includes("travel")) return "📷";
-    if (text.includes("code") || text.includes("project")) return "💻";
+    if (text.includes("identity") || text.includes("profile") || text.includes("bio")) return "🪪";
+    if (text.includes("social") || text.includes("people") || text.includes("message")) return "💬";
+    if (text.includes("finance") || text.includes("purchase") || text.includes("admin")) return "💳";
+    if (text.includes("photo")) return "📷";
+    if (text.includes("travel")) return "✈️";
+    if (text.includes("health") || text.includes("fitness")) return "🏃";
+    if (text.includes("write") || text.includes("writing") || text.includes("journal")) return "✍️";
+    if (text.includes("code") || text.includes("project") || text.includes("systems")) return "💻";
+    if (text.includes("config") || text.includes("system")) return "⚙️";
     return "📁";
   }
 
@@ -4777,24 +5414,159 @@ class TopologyMode extends CanvasMode {
 
 class TimelineMode extends CanvasMode {
   mount(canvas) {
-    super.mount(canvas);
     this.brush = null;
     this.tFilter = null;
     this.preset = "all";
     this.scope = [];
-    this.hero = this.shouldHeroTimeline();
     this.ghost = [];
     this.cam = { x: 0, y: 0, k: 1 };
-    updateTimelineHud();
+    this.loading = true;
+    this.loadError = null;
+    this._loadingFrame = null;
+    super.mount(canvas);
+    this.loadTimelineData();
   }
 
-  shouldHeroTimeline() {
-    if (state.nodes.length < 180) return true;
-    const cats = new Set(state.nodes.map(n => n.category));
-    return cats.size < 3;
+  async loadTimelineData() {
+    const run = activeRun();
+    try {
+      await loadGraph();
+    } catch (err) {
+      console.error("Failed to load timeline data:", err);
+      this.loadError = err;
+    }
+    this.loading = false;
+    if (this._loadingFrame) {
+      cancelAnimationFrame(this._loadingFrame);
+      this._loadingFrame = null;
+    }
+    this.extents();
+    updateTimelineHud();
+    this.draw();
+  }
+
+  unmount() {
+    if (this._loadingFrame) {
+      cancelAnimationFrame(this._loadingFrame);
+      this._loadingFrame = null;
+    }
+    super.unmount();
+  }
+
+  drawLoadingScreen() {
+    const r = this.size();
+    const ctx = this.ctx;
+    ctx.save();
+    const gg = ctx.createLinearGradient(0, 0, 0, r.height);
+    gg.addColorStop(0, "#fbfcff");
+    gg.addColorStop(1, "#f5f8ff");
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Subtle grid lines (frost-glass)
+    ctx.strokeStyle = "rgba(0,0,0,0.04)";
+    for (let x = 48; x < r.width; x += 90) line(ctx, x, 28, x, r.height - 58);
+    for (let y = 38; y < r.height - 58; y += 54) line(ctx, 38, y, r.width, y);
+    // Title
+    ctx.fillStyle = "#1b2446";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Timeline", 36, 78);
+    const t = Date.now() / 1000;
+    const dots = ".".repeat(1 + Math.floor((t * 2) % 4));
+    ctx.fillStyle = "rgba(47,63,108,0.78)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText(`Loading file history${dots}`, 36, 108);
+    // Animated orbit dots
+    for (let i = 0; i < 14; i++) {
+      const cx = r.width / 2 + Math.cos(i * Math.PI / 7 + t * 0.5) * 160;
+      const cy = r.height / 2 + Math.sin(i * Math.PI / 7 + t * 0.5) * 100;
+      const alpha = 0.07 + Math.sin(t * 2 + i * 1.7) * 0.05;
+      const rr = 3 + Math.sin(t * 1.4 + i) * 2;
+      ctx.fillStyle = `rgba(59,111,240,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    updateTimelineHud({ shown: 0, total: 0, preset: this.preset });
+    this._loadingFrame = requestAnimationFrame(() => this.draw());
+  }
+
+  drawErrorScreen() {
+    const r = this.size();
+    const ctx = this.ctx;
+    ctx.save();
+    const gg = ctx.createLinearGradient(0, 0, 0, r.height);
+    gg.addColorStop(0, "#fbfcff");
+    gg.addColorStop(1, "#f5f8ff");
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Frost-glass grid
+    ctx.strokeStyle = "rgba(0,0,0,0.04)";
+    for (let x = 48; x < r.width; x += 90) line(ctx, x, 28, x, r.height - 58);
+    for (let y = 38; y < r.height - 58; y += 54) line(ctx, 38, y, r.width, y);
+    ctx.fillStyle = "#1b2446";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Timeline", 36, 78);
+    ctx.fillStyle = "rgba(47,63,108,0.78)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText("Could not load file history.", 36, 108);
+    // Error details
+    const msg = this.loadError?.message || String(this.loadError || "Unknown error");
+    ctx.fillStyle = "rgba(107,114,128,0.7)";
+    ctx.font = "13px system-ui";
+    ctx.fillText(msg.slice(0, 64), 36, 138);
+    // Retry hint
+    ctx.fillStyle = "rgba(59,111,240,0.7)";
+    ctx.font = "500 14px system-ui";
+    ctx.fillText("Click to retry", 36, 168);
+    ctx.restore();
+    updateTimelineHud({ shown: 0, total: 0, preset: this.preset });
+  }
+
+  drawEmptyScreen() {
+    const r = this.size();
+    const ctx = this.ctx;
+    ctx.save();
+    const gg = ctx.createLinearGradient(0, 0, 0, r.height);
+    gg.addColorStop(0, "#fbfcff");
+    gg.addColorStop(1, "#f5f8ff");
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Frost-glass subtle grid
+    ctx.strokeStyle = "rgba(0,0,0,0.03)";
+    for (let x = 48; x < r.width; x += 90) line(ctx, x, 28, x, r.height - 58);
+    for (let y = 38; y < r.height - 58; y += 54) line(ctx, 38, y, r.width, y);
+    // Scattered faint nodes — suggests empty timeline
+    for (let i = 0; i < 16; i++) {
+      const x = ((i * 83) % Math.max(1, r.width - 80)) + 40;
+      const y = ((i * 61) % Math.max(1, r.height - 120)) + 60;
+      ctx.fillStyle = "rgba(75,112,203,0.04)";
+      ctx.beginPath();
+      ctx.arc(x, y, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#1b2446";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Timeline", 36, 78);
+    ctx.fillStyle = "rgba(47,63,108,0.78)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText("No file history yet.", 36, 108);
+    ctx.fillStyle = "rgba(59,111,240,0.55)";
+    ctx.font = "500 14px system-ui";
+    ctx.fillText("Run a scan to populate the timeline.", 36, 138);
+    ctx.restore();
+    updateTimelineHud({ shown: 0, total: 0, preset: this.preset });
   }
 
   down(ev) {
+    if (this.loadError) {
+      // Retry on click when in error state
+      this.loadError = null;
+      this.loading = true;
+      this.draw();
+      this.loadTimelineData();
+      return;
+    }
     const r = this.canvas.getBoundingClientRect();
     if (ev.offsetY > r.height - 60) {
       this.brush = { x0: ev.offsetX, x1: ev.offsetX };
@@ -4886,12 +5658,18 @@ class TimelineMode extends CanvasMode {
   }
 
   draw() {
+    if (this.loading) {
+      this.drawLoadingScreen();
+      return;
+    }
+    if (this.loadError) {
+      this.drawErrorScreen();
+      return;
+    }
     const r = this.size();
     this.extents();
     if (!this.scope.length) {
-      this.ctx.clearRect(0, 0, r.width, r.height);
-      drawCounts(0, 0);
-      updateTimelineHud({ shown: 0, total: 0, preset: this.preset });
+      this.drawEmptyScreen();
       return;
     }
     const shown = this.nodes();
@@ -4916,56 +5694,12 @@ class TimelineMode extends CanvasMode {
       this.maxS = 1;
       return;
     }
-    if (this.hero) {
-      const now = Date.now() / 1000;
-      this.minT = now - 365 * 86400;
-      this.maxT = now;
-      this.minS = Math.log10(1024 + 1);
-      this.maxS = Math.log10(1024 * 1024 * 1024 + 1);
-      if (!this.ghost.length) this.seedGhost();
-      return;
-    }
     const ts = this.scope.map(n => n.mtime || Date.now() / 1000);
     const ss = this.scope.map(n => Math.log10((n.size || 1) + 1));
     this.minT = Math.min(...ts);
     this.maxT = Math.max(...ts);
     this.minS = Math.min(...ss);
     this.maxS = Math.max(...ss);
-  }
-
-  seedGhost() {
-    const cats = Object.keys(palette);
-    const vals = [];
-    const rows = Math.max(260, Math.min(720, state.nodes.length * 10));
-    for (let i = 0; i < rows; i++) {
-      const t = this.minT + (this.maxT - this.minT) * ((i * 37 % rows) / rows);
-      const sz = 1024 + Math.pow(((i * 19) % rows) / rows, 3.2) *
-        (1024 * 1024 * 300);
-      const cat = cats[i % cats.length];
-      vals.push({
-        id: `ghost-${i}`,
-        mtime: t,
-        size: sz,
-        category: cat,
-        r: 2.2 + (((i * 7) % 10) / 10) * 2.6,
-        label: this.ghostLabel(i, cat),
-      });
-    }
-    this.ghost = vals;
-  }
-
-  ghostLabel(i, cat) {
-    const tags = {
-      Documents: ["Executive summary", "Project plan", "Q2 deck",
-        "Roadmap review"],
-      Images: ["Design assets", "Screenshots", "Export board", "City photo"],
-      Code: ["Build log", "API patch", "Infra notes", "Schema draft"],
-      Video: ["Demo capture", "Walkthrough", "Interview clip", "Screen cast"],
-      System: ["Index state", "Pipeline run", "Sync event", "Cache snapshot"],
-      Other: ["Research notes", "Topic digest", "Weekly brief", "Audit memo"],
-    };
-    const pool = tags[cat] || tags.Other;
-    return pool[i % pool.length];
   }
 
   bg(r) {
@@ -5050,16 +5784,6 @@ class TimelineMode extends CanvasMode {
 
   dots(r) {
     const ctx = this.ctx;
-    if (this.hero) {
-      for (const n of this.ghost) {
-        const p = this.point(n, r);
-        ctx.globalAlpha = 0.14;
-        ctx.fillStyle = palette[n.category] || "#6b7280";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, Math.max(1.6, n.r * 0.7), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
     for (const n of this.nodes()) {
       const p = this.point(n, r);
       const base = opacityFor(n);
@@ -5107,8 +5831,7 @@ class TimelineMode extends CanvasMode {
   }
 
   callouts(r) {
-    const top = this.hero ? this.ghost.slice(0, 8) :
-      largestByMonth(this.nodes()).slice(0, 8);
+    const top = largestByMonth(this.nodes()).slice(0, 8);
     const boxes = [];
     this.ctx.font = "11px system-ui";
     top.forEach(n => this.callout(n, r, boxes));
@@ -5161,8 +5884,7 @@ class TimelineMode extends CanvasMode {
   }
 
   nodes() {
-    const baseNodes = this.scope.length ? this.scope : visibleNodes();
-    const nodes = this.hero ? [...this.ghost, ...baseNodes] : baseNodes;
+    const nodes = this.scope.length ? this.scope : visibleNodes();
     if (!this.tFilter) return nodes;
     return nodes.filter(n => n.mtime >= this.tFilter[0] &&
       n.mtime <= this.tFilter[1]);
@@ -5177,16 +5899,179 @@ class UniverseMode {
     this.fallback2d = false;
     this.cam2d = { x: 0, y: 0, k: 0.85 };
     this.hoverNode = null;
+    this.loading = true;
+    this.loadError = null;
+    this._loadingFrame = null;
   }
 
   mount(canvas) {
     this.canvas = canvas;
+    this.loading = true;
+    this.loadError = null;
+    this._loadingFrame = null;
+    // Set up a 2D context for loading/error screens
+    this.ctx = canvas.getContext("2d");
+    this.drawLoadingScreen();
+    this.loadUniverseData();
+  }
+
+  async loadUniverseData() {
+    const run = activeRun();
+    try {
+      await loadGraph();
+    } catch (err) {
+      console.error("Failed to load universe data:", err);
+      this.loadError = err;
+    }
+    this.loading = false;
+    if (this._loadingFrame) {
+      cancelAnimationFrame(this._loadingFrame);
+      this._loadingFrame = null;
+    }
+    if (this.loadError) {
+      this.drawErrorScreen();
+      this._errorClick = ev => {
+        if (ev.target === this.canvas) {
+          this.canvas.removeEventListener("click", this._errorClick);
+          this.loadError = null;
+          this.loading = true;
+          this.drawLoadingScreen();
+          this.loadUniverseData();
+        }
+      };
+      this.canvas.addEventListener("click", this._errorClick);
+      return;
+    }
+    // No nodes? Show empty state
+    if (!state.nodes || state.nodes.length === 0) {
+      this.drawEmptyScreen();
+      return;
+    }
+    // Data loaded — now do full initialization
     this.init();
     this.bind();
     this.animate();
   }
 
+  sizeScreen() {
+    const r = this.canvas.getBoundingClientRect();
+    this.canvas.width = Math.floor(r.width * devicePixelRatio);
+    this.canvas.height = Math.floor(r.height * devicePixelRatio);
+    this.ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    return r;
+  }
+
+  drawLoadingScreen() {
+    if (!this.ctx) return;
+    const r = this.sizeScreen();
+    const ctx = this.ctx;
+    const bg = ctx.createLinearGradient(0, 0, 0, r.height);
+    bg.addColorStop(0, "#05060f");
+    bg.addColorStop(1, "#03050b");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Frost-glass subtle grid
+    ctx.strokeStyle = "rgba(176,196,255,0.05)";
+    ctx.lineWidth = 0.5;
+    for (let x = r.width / 2 % 80; x < r.width; x += 80) line(ctx, x, 0, x, r.height);
+    for (let y = r.height / 2 % 80; y < r.height; y += 80) line(ctx, 0, y, r.width, y);
+    // Title
+    ctx.fillStyle = "rgba(210,220,255,0.92)";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Universe", 48, 88);
+    const t = Date.now() / 1000;
+    const dots = ".".repeat(1 + Math.floor((t * 2) % 4));
+    ctx.fillStyle = "rgba(180,195,235,0.65)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText(`Loading data universe${dots}`, 48, 118);
+    // Animated orbiting particles
+    for (let i = 0; i < 20; i++) {
+      const cx = r.width / 2 + Math.cos(i * Math.PI / 10 + t * 0.4) * 180;
+      const cy = r.height / 2 + Math.sin(i * Math.PI / 10 + t * 0.4) * 120;
+      const alpha = 0.06 + Math.sin(t * 2.3 + i * 1.9) * 0.04;
+      const rr = 2 + Math.sin(t * 1.7 + i) * 1.5;
+      ctx.fillStyle = `rgba(128,160,255,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Category labels
+    const cats = Object.keys(palette);
+    cats.forEach((cat, i) => {
+      const angle = (i / cats.length) * Math.PI * 2 + t * 0.15;
+      const lx = r.width / 2 + Math.cos(angle) * 70;
+      const ly = r.height / 2 + Math.sin(angle) * 50;
+      ctx.fillStyle = "rgba(200,215,245,0.35)";
+      ctx.font = "11px system-ui";
+      ctx.fillText(cat, lx, ly);
+    });
+    drawCounts(state.nodes.length, 0);
+    this._loadingFrame = requestAnimationFrame(() => this.drawLoadingScreen());
+  }
+
+  drawErrorScreen() {
+    if (!this.ctx) return;
+    const r = this.sizeScreen();
+    const ctx = this.ctx;
+    const bg = ctx.createLinearGradient(0, 0, 0, r.height);
+    bg.addColorStop(0, "#05060f");
+    bg.addColorStop(1, "#03050b");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Frost-glass grid
+    ctx.strokeStyle = "rgba(176,196,255,0.05)";
+    ctx.lineWidth = 0.5;
+    for (let x = r.width / 2 % 80; x < r.width; x += 80) line(ctx, x, 0, x, r.height);
+    for (let y = r.height / 2 % 80; y < r.height; y += 80) line(ctx, 0, y, r.width, y);
+    ctx.fillStyle = "rgba(210,220,255,0.92)";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Universe", 48, 88);
+    ctx.fillStyle = "rgba(180,195,235,0.65)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText("Could not load data universe.", 48, 118);
+    // Error details
+    const msg = this.loadError?.message || String(this.loadError || "Unknown error");
+    ctx.fillStyle = "rgba(140,150,180,0.55)";
+    ctx.font = "13px system-ui";
+    ctx.fillText(msg.slice(0, 64), 48, 148);
+    // Retry hint
+    ctx.fillStyle = "rgba(128,180,255,0.55)";
+    ctx.font = "500 14px system-ui";
+    ctx.fillText("Click to retry", 48, 178);
+    drawCounts(0, 0);
+  }
+
+  drawEmptyScreen() {
+    if (!this.ctx) return;
+    const r = this.sizeScreen();
+    const ctx = this.ctx;
+    const bg = ctx.createLinearGradient(0, 0, 0, r.height);
+    bg.addColorStop(0, "#05060f");
+    bg.addColorStop(1, "#03050b");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, r.width, r.height);
+    // Frost-glass grid
+    ctx.strokeStyle = "rgba(176,196,255,0.05)";
+    ctx.lineWidth = 0.5;
+    for (let x = r.width / 2 % 80; x < r.width; x += 80) line(ctx, x, 0, x, r.height);
+    for (let y = r.height / 2 % 80; y < r.height; y += 80) line(ctx, 0, y, r.width, y);
+    ctx.fillStyle = "rgba(210,220,255,0.92)";
+    ctx.font = "700 48px Sora, Manrope, sans-serif";
+    ctx.fillText("Universe", 48, 88);
+    ctx.fillStyle = "rgba(180,195,235,0.65)";
+    ctx.font = "500 20px Manrope, sans-serif";
+    ctx.fillText("No data universe yet.", 48, 118);
+    ctx.fillStyle = "rgba(128,180,255,0.55)";
+    ctx.font = "500 14px system-ui";
+    ctx.fillText("Run a scan to populate the universe.", 48, 148);
+    drawCounts(0, 0);
+  }
+
   unmount() {
+    if (this._loadingFrame) {
+      cancelAnimationFrame(this._loadingFrame);
+      this._loadingFrame = null;
+    }
     cancelAnimationFrame(this.raf);
     this.unbind();
     this.ctx = null;
@@ -6052,8 +6937,8 @@ function renderSummary() {
   const largest = [...state.nodes].sort((a, b) => b.size - a.size).slice(0, 6);
   const todayCount = modifiedToday();
   const modeLabel = modeTitle[mode] || "Summary";
-  const audRows = state.audiences.length ? state.audiences : defaultAudiences();
-  const aud = audRows[0] || { name: "Recruiter", score: 79, summary: "" };
+  const audRows = state.audiences.length ? state.audiences : [];
+  const aud = audRows[0] || null;
   const byType = cats.map(([cat, val]) => `<div class="rail-type-row">
     <span>${esc(cat)}</span><b>${val.toLocaleString()}</b></div>`).join("");
   const lgRows = largest.map(n => `<div class="rail-file-row" title="${
@@ -6081,13 +6966,15 @@ function renderSummary() {
     </section>
     <section class="rail-card">
       <h3>Audience simulator</h3>
+      ${aud ? `
       <div class="rail-aud-main"><b>${esc(aud.name)}</b><span>${
-        Number(aud.score || 0)}%</span></div>
+        scorePct(aud.score)}</span></div>
       <p class="muted">${esc(aud.summary ||
-        "Run simulation for audience-specific guidance.")}</p>
+        "")}</p>
       <button class="rail-cta" type="button" data-mode-jump="simulations">
         ${mode === "timeline" ? "Inspect selected range" : "Open simulation"}
-      </button>
+      </button>` : `<p class="muted">No audience data yet. Run a scan to generate audience signals.</p>
+      <button class="rail-cta" type="button" data-mode-jump="workstreams">Run a scan</button>`}
     </section>`;
   const jump = el.inspector.querySelector("[data-mode-jump]");
   if (jump) {
@@ -6098,23 +6985,14 @@ function renderSummary() {
 }
 
 function renderUniverseRail() {
-  const hero = !!state.manager?.mode?.fallback2d;
-  const total = hero ? Math.max(1200, state.nodes.length * 28) :
-    visibleNodes().length;
-  const clusters = hero ? 8 : uniqueClusters();
-  const today = hero ? 156 : modifiedToday();
-  const scaled = hero ? {
-    Documents: Math.round(total * 0.68),
-    Images: Math.max(13, Math.round(total * 0.03)),
-    Other: Math.max(8, Math.round(total * 0.02)),
-    Video: Math.max(2, Math.round(total * 0.01)),
-    System: Math.max(1, Math.round(total * 0.005)),
-  } : null;
-  const byType = (scaled ? Object.entries(scaled) : Object.keys(palette).map(
-    cat => [cat, countCat(cat)])).map(([cat, val]) => `<div class="rail-type-row">
+  const total = visibleNodes().length;
+  const clusters = uniqueClusters();
+  const today = modifiedToday();
+  const byType = Object.keys(palette).map(
+    cat => [cat, countCat(cat)]).filter(([, val]) => val > 0).map(([cat, val]) => `<div class="rail-type-row">
     <span>${esc(cat)}</span><b>${Number(val).toLocaleString()}</b></div>`).join("");
-  const rows = state.audiences.length ? state.audiences : defaultAudiences();
-  const top = rows[0] || defaultAudiences()[0];
+  const rows = state.audiences.length ? state.audiences : [];
+  const top = rows[0] || null;
   el.inspector.innerHTML = `
     <section class="rail-card">
       <h2 class="rail-head">Universe overview</h2>
@@ -6134,18 +7012,14 @@ function renderUniverseRail() {
     <section class="rail-card">
       <div class="rail-card-head"><h3>Audience Simulator</h3>
         <button class="rail-link">View all</button></div>
-      <div class="rail-aud-main"><b>${esc(top.name || "Recruiter")}</b><span>${
-        Number(top.score || 0)}%</span></div>
-      <p class="muted">${esc(top.summary || "")}</p>
-      <div class="rail-type-row"><span>Estimated reach</span><b>68%</b></div>
-      <div class="rail-type-row"><span>Top strength</span><b>Technical depth</b></div>
-      <div class="rail-type-row"><span>Watchouts</span><b>Low bias</b></div>
+      ${top ? `
+      <div class="rail-aud-main"><b>${esc(top.name)}</b><span>${
+        scorePct(top.score)}</span></div>
+      <p class="muted">${esc(top.summary || "")}</p>` : `<p class="muted">No audience data loaded. Run a scan to generate audience signals.</p>`}
     </section>
     <section class="rail-card">
       <h3>Iris insights</h3>
-      <div class="rail-file-row"><span>Breadth of interests</span><b>87 · High</b></div>
-      <div class="rail-file-row"><span>Network influence</span><b>74 · Moderate</b></div>
-      <div class="rail-file-row"><span>Privacy posture</span><b>68 · Moderate</b></div>
+      ${state.homeSummary ? `<div class="muted iris-content">${esc(state.homeSummary).slice(0, 180)}…</div>` : `<p class="muted">No insights yet. Chat with Iris to generate a summary.</p>`}
       <button class="rail-cta" type="button" data-mode-jump="iris">
         View full analysis
       </button>
@@ -6155,19 +7029,14 @@ function renderUniverseRail() {
 }
 
 async function renderTopologySummary() {
-  const hero = !!state.manager?.mode?.hero;
-  const total = hero ? Math.max(1200, state.nodes.length * 28) :
-    visibleNodes().length;
-  const clusters = hero ? 12 : uniqueClusters();
-  const today = hero ? 156 : modifiedToday();
-  const scaled = hero ? {
-    Documents: Math.round(total * 0.98),
-    Images: Math.max(13, Math.round(total * 0.01)),
-    Other: Math.max(8, Math.round(total * 0.008)),
-    Video: Math.max(2, Math.round(total * 0.004)),
-    System: Math.max(1, Math.round(total * 0.002)),
-  } : null;
-  el.inspector.innerHTML = `
+  const total = visibleNodes().length;
+  const clusters = uniqueClusters();
+  const today = modifiedToday();
+  const byType = Object.keys(palette).map(cat =>
+    [cat, countCat(cat)]).filter(([, val]) => val > 0).map(([cat, val]) => `<div class="rail-type-row">
+    <span>${esc(cat)}</span><b>${
+      Number(val).toLocaleString()}</b></div>`).join("");
+    return `
     <section class="rail-card">
       <h2 class="rail-head">Map overview</h2>
       <div class="rail-metric-grid">
@@ -6181,10 +7050,7 @@ async function renderTopologySummary() {
     <section class="rail-card">
       <div class="rail-card-head"><h3>By type</h3>
         <button class="rail-link">View all</button></div>
-      ${(scaled ? Object.entries(scaled) : Object.keys(palette).map(cat =>
-        [cat, countCat(cat)])).map(([cat, val]) => `<div class="rail-type-row">
-        <span>${esc(cat)}</span><b>${
-          Number(val).toLocaleString()}</b></div>`).join("")}
+      ${byType}
     </section>
     <section class="rail-card">
       <div class="rail-card-head"><h3>Audience views</h3>
@@ -6207,19 +7073,20 @@ async function renderTopologySummary() {
     state.manager.switch("universe"));
   await Promise.all([refreshAudiences(), refreshHomeData()]);
   if (state.manager?.name !== "topology" || state.selected) return;
-  const rows = state.audiences.length ? state.audiences : defaultAudiences();
+  const rows = state.audiences.length ? state.audiences : [];
   const wrap = el.inspector.querySelector("#mapAudienceRows");
   if (wrap) {
     wrap.innerHTML = rows.map(row => {
-      const score = Number(row.score || 0);
-      const barW = Math.max(8, Math.min(100, score));
-      const barColor = score >= 70 ? "#22c55e" : score >= 50 ? "#f59e0b" : "#ef4444";
+      const score = scoreNum(row.score);
+      const barW = score !== null ? Math.max(8, Math.min(100, score)) : 0;
+      const barColor = score !== null ? (score >= 70 ? "#22c55e" : score >= 50 ? "#f59e0b" : "#ef4444") : "#6b7280";
+      const scoreText = score !== null ? `${score}%` : "--";
       const label = (row.name || row.id || "").replace(/\s+read$/i, "").trim();
       return `<button class="map-aud-row" data-aud="${esc(row.id)}">
         <div class="map-aud-top">
           <span class="map-aud-icon">${esc(row.icon || "👤")}</span>
           <span class="map-aud-label">${esc(label)}</span>
-          <span class="map-aud-pct">${score}%</span>
+          <span class="map-aud-pct">${scoreText}</span>
         </div>
         <div class="map-aud-bar-track">
           <div class="map-aud-bar" style="width:${barW}%;background:${barColor}"></div>
@@ -6265,9 +7132,9 @@ function renderVaultRail() {
     </section>
     <section class="rail-card">
       <h3>Sync status</h3>
-      <div class="rail-type-row"><span>iCloud Drive</span><b>Up to date</b></div>
-      <div class="rail-type-row"><span>Google Drive</span><b>Up to date</b></div>
-      <div class="rail-type-row"><span>Local folders</span><b>Up to date</b></div>
+      ${state.homeData?.sync ? Object.entries(state.homeData.sync).map(([name, st]) =>
+        `<div class="rail-type-row"><span>${esc(name)}</span><b>${esc(String(st || "Unknown"))}</b></div>`
+      ).join("") : `<p class="muted">No sync integrations configured.</p>`}
     </section>
     <section class="rail-card">
       <h3>Privacy guardrails</h3>
@@ -6279,13 +7146,28 @@ function renderVaultRail() {
 }
 
 function renderAudienceRail() {
-  const rows = state.audiences.length ? state.audiences : defaultAudiences();
-  const top = rows[0] || { name: "Recruiter", score: 79, summary: "" };
+  const rows = state.audiences.length ? state.audiences : [];
+  if (!rows.length) {
+    el.inspector.innerHTML = `
+      <section class="rail-card">
+        <h2 class="rail-head">No audience data loaded</h2>
+        <p class="muted">Run a scan to generate audience profiles. Once data is available, you'll see how different people and systems perceive your digital footprint.</p>
+      </section>
+      <section class="rail-card">
+        <h3>What to improve next</h3>
+        <p class="muted">Scan a folder to start generating audience signals.</p>
+        <button class="rail-cta" type="button" data-mode-jump="simulations">Run simulation</button>
+      </section>`;
+    el.inspector.querySelector("[data-mode-jump]")?.addEventListener("click", () =>
+      state.manager.switch("simulations"));
+    return;
+  }
+  const top = rows[0];
   el.inspector.innerHTML = `
     <section class="rail-card">
-      <div class="rail-card-head"><h2 class="rail-head">${esc(top.name)}</h2>
-        <span class="rail-chip">${Number(top.score || 0) >= 75 ? "High" : "Moderate"} confidence</span></div>
-      <div class="rail-aud-main"><b>${Number(top.score || 0)}%</b><span>Overall impression</span></div>
+      <div class="rail-card-head"><h2 class="rail-head">${esc(top.name || "Audience")}</h2>
+        <span class="rail-chip">${scoreLabel(top.score) || "—"} confidence</span></div>
+      <div class="rail-aud-main"><b>${scorePct(top.score)}</b><span>Overall impression</span></div>
       <p class="muted">${esc(top.summary || "")}</p>
     </section>
     <section class="rail-card">
@@ -6295,9 +7177,7 @@ function renderAudienceRail() {
     </section>
     <section class="rail-card">
       <h3>What to improve next</h3>
-      <div class="rail-file-row"><span>Add recent metrics</span><b>Learn</b></div>
-      <div class="rail-file-row"><span>Increase leadership visibility</span><b>Learn</b></div>
-      <div class="rail-file-row"><span>Share public content</span><b>Learn</b></div>
+      <p class="muted">Run a simulation to get personalized recommendations.</p>
       <button class="rail-cta" type="button" data-mode-jump="simulations">Run simulation</button>
     </section>`;
   el.inspector.querySelector("[data-mode-jump]")?.addEventListener("click", () =>
@@ -6305,27 +7185,24 @@ function renderAudienceRail() {
 }
 
 function renderSimulationRail() {
-  const rows = state.audiences.length ? state.audiences : defaultAudiences();
+  const rows = state.audiences.length ? state.audiences : [];
   const out = rows.slice(0, 4).map(r => {
-    const now = Number(r.score || 0);
-    const aft = Math.min(99, now + 6 + (r.id === "recruiter" ? 4 : 0));
+    const now = scorePct(r.score);
     return `<div class="rail-sim-row"><span>${esc(r.name || r.id)}</span>
-      <b>${now}%</b><b>${aft}%</b><b class="good">+${aft - now}%</b></div>`;
+      <b>${now}</b><b class="muted">—</b><b class="muted">—</b></div>`;
   }).join("");
   el.inspector.innerHTML = `
     <section class="rail-card">
       <h2 class="rail-head">Projected outcomes</h2>
       <p class="muted">How this scenario may shift audience perception.</p>
-      <div class="rail-sim-head"><span>Audience</span><span>Current</span>
+      ${out ? `<div class="rail-sim-head"><span>Audience</span><span>Current</span>
         <span>After</span><span>Delta</span></div>
-      ${out}
+      ${out}` : `<p class="muted">No audience data loaded. Run a scan to generate audience signals.</p>`}
     </section>
     <section class="rail-card">
       <h3>Recommended next actions</h3>
-      <div class="rail-file-row"><span>Publish case study</span><b>↗</b></div>
-      <div class="rail-file-row"><span>Add endorsements</span><b>↗</b></div>
-      <div class="rail-file-row"><span>Remove noisy files</span><b>↗</b></div>
-      <button class="rail-cta">View all suggestions</button>
+      ${rows.length ? `<p class="muted">Run a full simulation to see recommended next actions.</p>` : `<p class="muted">No audience data available.</p>`}
+      <button class="rail-cta" type="button" data-mode-jump="simulations">Open simulator</button>
     </section>`;
 }
 
@@ -6363,18 +7240,18 @@ function renderSettingsRail() {
     <section class="rail-card">
       <div class="rail-card-head"><h2 class="rail-head">System health</h2>
         <button class="rail-link">View details</button></div>
-      <div class="rail-type-row"><span>Index service</span><b>Running</b></div>
-      <div class="rail-type-row"><span>Analysis engine</span><b>Running</b></div>
-      <div class="rail-type-row"><span>Model status</span><b>Up to date</b></div>
+      <div class="rail-type-row"><span>Index service</span><b>${esc(ops?.index?.status || "Unknown")}</b></div>
+      <div class="rail-type-row"><span>Analysis engine</span><b>${esc(ops?.analysis?.status || "Unknown")}</b></div>
+      <div class="rail-type-row"><span>Model status</span><b>${esc(ops?.model?.status || "Unknown")}</b></div>
       <div class="rail-type-row"><span>Runs</span><b>${runs}</b></div>
       <div class="rail-type-row"><span>Latest</span><b>${esc(latest)}</b></div>
       <div class="rail-type-row"><span>Storage free</span><b>${free}</b></div>
     </section>
     <section class="rail-card">
       <h3>Backup & restore</h3>
-      <div class="rail-file-row"><span>Last backup</span><b>Today</b></div>
-      <div class="rail-file-row"><span>Auto-backup</span><b>Daily</b></div>
-      <div class="rail-file-row"><span>Restore from backup</span><b>Ready</b></div>
+      <div class="rail-file-row"><span>Last backup</span><b>${esc(ops?.backup?.last || "Never")}</b></div>
+      <div class="rail-file-row"><span>Auto-backup</span><b>${esc(ops?.backup?.schedule || "Off")}</b></div>
+      <div class="rail-file-row"><span>Restore from backup</span><b>${ops?.backup?.restore_available ? "Available" : "Not configured"}</b></div>
     </section>
     <section class="rail-card rail-danger">
       <h3>Danger zone</h3>
@@ -6384,10 +7261,116 @@ function renderSettingsRail() {
     </section>`;
 }
 
+let _contradictionCache = null;
+
+async function renderContradictionRail() {
+  // Show loading skeleton while fetching
+  el.inspector.innerHTML = `
+    <section class="rail-card">
+      <h2 class="rail-head">Contradictions</h2>
+      <p class="muted">Loading contradiction data…</p>
+      <div class="rail-progress"><span class="rail-progress-indeterminate"></span></div>
+    </section>`;
+
+  try {
+    const resp = await getJson("/api/v1/contradictions");
+    const contras = resp.contradictions || [];
+    _contradictionCache = contras;
+
+    if (!contras.length) {
+      el.inspector.innerHTML = `
+        <section class="rail-card">
+          <h2 class="rail-head">Contradictions</h2>
+          <p class="muted">No contradictions detected in your footprint.</p>
+          <p class="muted" style="font-size:11px">Run an audit with broader sources to surface narrative conflicts, timeline gaps, or profile mismatches.</p>
+        </section>
+        <section class="rail-card">
+          <h3>What to scan</h3>
+          <div class="rail-file-row"><span>Resume vs LinkedIn profile</span><b>Job title</b></div>
+          <div class="rail-file-row"><span>GitHub activity vs portfolio</span><b>Skill claims</b></div>
+          <div class="rail-file-row"><span>Old public profiles</span><b>Stale context</b></div>
+          <button class="rail-cta" type="button" data-mode-jump="workstreams">
+            Run a scan
+          </button>
+        </section>`;
+      el.inspector.querySelector("[data-mode-jump]")?.addEventListener("click", () =>
+        state.manager.switch("workstreams"));
+      return;
+    }
+
+    renderContradictionCards(contras);
+  } catch (err) {
+    el.inspector.innerHTML = `
+      <section class="rail-card">
+        <h2 class="rail-head">Contradictions</h2>
+        <p class="muted">Could not load contradiction data.</p>
+        <p class="muted" style="font-size:11px">${esc(err.message || "Unknown error")}</p>
+        <button class="rail-cta" type="button" onclick="renderContradictionRail()">Retry</button>
+      </section>`;
+  }
+}
+
+function renderContradictionCards(contras) {
+  const sevOrder = { critical: 3, high: 2, medium: 1, low: 0 };
+  const sorted = [...contras].sort((a, b) =>
+    (sevOrder[b.severity] || 0) - (sevOrder[a.severity] || 0));
+
+  const sevIcon = { critical: "⬤", high: "◆", medium: "◈", low: "◇" };
+  const sevColor = { critical: "var(--coral)", high: "var(--amber)", medium: "var(--blue)", low: "var(--subtle)" };
+
+  const highCount = contras.filter(c => c.severity === "high" || c.severity === "critical").length;
+  const summaryLine = highCount
+    ? `${highCount} high-severity contradiction${highCount !== 1 ? "s" : ""} found`
+    : `${contras.length} contradiction${contras.length !== 1 ? "s" : ""} detected`;
+
+  const cardsHtml = sorted.map((c, i) => {
+    const catLabel = (c.category || "mismatch").replace(/_/g, " ");
+    const sev = (c.severity || "low").toLowerCase();
+    const audiences = Array.isArray(c.audience_affected) ? c.audience_affected : [];
+    const audTags = audiences.length
+      ? audiences.slice(0, 3).map(a => `<span class="ctr-aud-tag">${esc(a)}</span>`).join("")
+      : "";
+
+    return `<div class="ctr-card" data-idx="${i}">
+      <div class="ctr-card-head">
+        <span class="ctr-sev" style="color:${sevColor[sev] || sevColor.low}">${sevIcon[sev] || sevIcon.low}</span>
+        <span class="ctr-cat">${esc(catLabel)}</span>
+        <span class="ctr-sev-label" style="color:${sevColor[sev] || sevColor.low}">${sev.toUpperCase()}</span>
+      </div>
+      <p class="ctr-desc">${esc(c.description)}</p>
+      ${audTags ? `<div class="ctr-aud-row">${audTags}</div>` : ""}
+      ${c.resolution_suggestion ? `<div class="ctr-fix">
+        <span class="ctr-fix-label">Repair</span>
+        <span>${esc(c.resolution_suggestion)}</span>
+      </div>` : ""}
+    </div>`;
+  }).join("");
+
+  el.inspector.innerHTML = `
+    <section class="rail-card">
+      <div class="rail-card-head">
+        <h2 class="rail-head">Contradictions</h2>
+        <span class="rail-chip ctr-chip--live">${contras.length}</span>
+      </div>
+      <p class="muted">${summaryLine}. Evidence-driven conflicts across your digital footprint.</p>
+    </section>
+    <div class="ctr-list">${cardsHtml}</div>
+    <section class="rail-card">
+      <h3>What this means</h3>
+      <p class="muted" style="font-size:11px">Contradictions are not judgments. They highlight where different sources tell different stories — gaps you can close, align, or add context to.</p>
+      <button class="rail-cta" type="button" data-mode-jump="exports">
+        Export full contradiction report
+      </button>
+    </section>`;
+  el.inspector.querySelector("[data-mode-jump]")?.addEventListener("click", () =>
+    state.manager.switch("exports"));
+}
+
 function renderIrisRail() {
-  const rows = state.audiences.length ? state.audiences : defaultAudiences();
+  if (state.irisMode === "contradiction") return renderContradictionRail();
+  const rows = state.audiences.length ? state.audiences : [];
   const selected = rows.slice(0, 4).map(r => `<div class="rail-type-row">
-    <span>${esc(r.name || r.id)}</span><b>${Number(r.score || 0)}%</b></div>`)
+    <span>${esc(r.name || r.id)}</span><b>${scorePct(r.score)}</b></div>`)
     .join("");
   el.inspector.innerHTML = `
     <section class="rail-card">
@@ -6395,58 +7378,35 @@ function renderIrisRail() {
         <button class="rail-link">Edit</button></div>
       <div class="rail-type-row"><span>Local vault</span><b>${state.nodes.length.toLocaleString()} files</b></div>
       <div class="rail-type-row"><span>Clusters selected</span><b>${uniqueClusters()}</b></div>
-      <div class="rail-type-row"><span>Time range</span><b>Last 90 days</b></div>
+      <div class="rail-type-row"><span>Time range</span><b>${esc(state.homeData?.time_range || "All time")}</b></div>
     </section>
     <section class="rail-card">
       <h3>Audience views</h3>
-      ${selected}
+      ${selected || `<p class="muted">No audience data loaded. Run a scan first.</p>`}
     </section>
     <section class="rail-card">
       <h3>Quick tools</h3>
-      <div class="rail-file-row"><span>Summarize this context</span><b>↗</b></div>
-      <div class="rail-file-row"><span>Risk check</span><b>↗</b></div>
-      <div class="rail-file-row"><span>Cleanup suggestions</span><b>↗</b></div>
+      <div class="rail-file-row"><button class="rail-tool-btn" data-iris-prompt="Summarize my digital footprint and highlight the most important signals.">Summarize this context</button><b>Iris</b></div>
+      <div class="rail-file-row"><button class="rail-tool-btn" data-iris-prompt="Analyze my digital footprint for risks and vulnerabilities. What should I be aware of?">Risk check</button><b>Iris</b></div>
+      <div class="rail-file-row"><button class="rail-tool-btn" data-iris-prompt="What should I clean up or remove from my digital footprint to improve my audience scores?">Cleanup suggestions</button><b>Iris</b></div>
       <button class="rail-cta" type="button" data-mode-jump="simulations">
         Apply recommendation
       </button>
     </section>`;
+  // Wire quick-tool buttons to Iris
+  el.inspector.querySelectorAll(".rail-tool-btn[data-iris-prompt]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const prompt = btn.dataset.irisPrompt;
+      state.manager.switch("iris");
+      requestAnimationFrame(() => {
+        el.draft.value = prompt;
+        el.chatForm?.dispatchEvent(new Event("submit", { cancelable: true }));
+      });
+    });
+  });
   el.inspector.querySelector("[data-mode-jump]")?.addEventListener("click", () =>
     state.manager.switch("simulations"));
 }
-
-function defaultAudiences() {
-  return [
-    {
-      id: "recruiter",
-      name: "Recruiter read",
-      icon: "👤",
-      score: 80,
-      summary: "Most likely a strong fit for technical leadership roles.",
-    },
-    {
-      id: "investor",
-      name: "Investor read",
-      icon: "💰",
-      score: 76,
-      summary: "High builder signal with owner mindset.",
-    },
-    {
-      id: "lender",
-      name: "Lender read",
-      icon: "🏛",
-      score: 72,
-      summary: "Low risk with stable financial behavior.",
-    },
-    {
-      id: "stranger",
-      name: "Stranger read",
-      icon: "👁",
-      score: 68,
-      summary: "Creative and thoughtful with broad interests.",
-    },
-  ];
-}
-
 function ensureClusterLabelLayer() {
   if (ui.labels?.isConnected) return ui.labels;
   let layer = document.querySelector("#cluster-labels");
@@ -6509,6 +7469,36 @@ function ensureMapHint() {
   return hint;
 }
 
+async function fetchRepairPreview() {
+  const el = document.getElementById("repairQueuePreview");
+  if (!el) return;
+  try {
+    const data = await getJson("/api/v1/repairs");
+    const repairs = (data.repairs || []).filter(r => r.status === "pending").slice(0, 5);
+    if (!repairs.length) {
+      el.innerHTML = "<p class='muted'>No pending repairs</p>";
+      return;
+    }
+    el.innerHTML = repairs.map(r => {
+      const priority = Number(r.priority || 0).toFixed(2);
+      const impact = Number(r.impact || 0.5);
+      const dot = impact > 0.7 ? "high" : impact > 0.4 ? "medium" : "low";
+      return '<div class="repair-item" style="padding:6px 0;border-bottom:1px solid var(--border-color, rgba(255,255,255,0.06));font-size:12px">'
+        + '<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">'
+        + '<span class="ws-conf-dot ' + dot + '"></span>'
+        + '<span style="color:var(--text)">' + esc((r.title || r.description || "Repair").slice(0, 60)) + '</span>'
+        + '</div>'
+        + '<span style="font-size:10px;color:var(--muted)">priority ' + priority + '</span>'
+        + '</div>';
+    }).join("");
+    document.getElementById("viewAllRepairs")?.addEventListener("click", () => {
+      state.manager?.switch?.("exports");
+    });
+  } catch (_) {
+    el.innerHTML = "<p class='muted'>Repairs unavailable</p>";
+  }
+}
+
 function ensureAudienceModal() {
   if (ui.modal?.isConnected) return ui.modal;
   let modal = document.querySelector("#audienceModal");
@@ -6559,6 +7549,105 @@ function closeAudienceModal() {
   return true;
 }
 
+// ── claims evidence modal ──────────────────────────────────────────
+
+function ensureClaimsModal() {
+  if (ui.cModal?.isConnected) return ui.cModal;
+  let modal = document.querySelector("#claimsModal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "claimsModal";
+    modal.className = "audience-modal-overlay";
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="audience-modal glass" style="max-width:640px">
+        <div class="audience-modal-head">
+          <div class="audience-modal-who">
+            <span class="audience-modal-icon">🔍</span>
+            <div>
+              <div class="audience-modal-name claims-modal-title">Evidence</div>
+              <div class="audience-modal-sub">What Optic infers from your files</div>
+            </div>
+          </div>
+          <div class="audience-modal-score">
+            <span class="audience-score-num claims-modal-count">0</span>
+            <span class="audience-score-lbl">claims</span>
+          </div>
+          <button class="audience-modal-close" type="button">✕</button>
+        </div>
+        <div class="audience-modal-body claims-modal-body" style="max-height:60vh;overflow-y:auto"></div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  if (!modal.dataset.bound) {
+    modal.dataset.bound = "1";
+    modal.addEventListener("click", ev => {
+      if (ev.target === modal || ev.target.closest(".audience-modal-close")) {
+        closeClaimsModal();
+      }
+    });
+    document.addEventListener("keydown", ev => {
+      if (ev.key === "Escape") closeClaimsModal();
+    });
+  }
+  ui.cModal = modal;
+  return modal;
+}
+
+function closeClaimsModal() {
+  const modal = ensureClaimsModal();
+  if (modal.hidden) return false;
+  modal.hidden = true;
+  return true;
+}
+
+async function showClaimsModal(ws) {
+  const modal = ensureClaimsModal();
+  modal.hidden = false;
+  const title = modal.querySelector(".claims-modal-title");
+  const count = modal.querySelector(".claims-modal-count");
+  const body = modal.querySelector(".claims-modal-body");
+  const name = ws.name || ws.id || "this workstream";
+  title.textContent = `Evidence: ${name}`;
+  count.textContent = "…";
+  body.innerHTML = `<div class="cards-loading"><span class="pulse-dot"></span>
+    <span>Loading inference claims…</span></div>`;
+  try {
+    const data = await getJson(`/api/v1/claims/workstream/${encodeURIComponent(name)}`);
+    const claims = data.claims || [];
+    const byLens = data.by_audience || {};
+    count.textContent = claims.length;
+    if (!claims.length) {
+      body.innerHTML = `<p class="muted">No inference claims found for "${esc(name)}". Run an audit to generate claims.</p>`;
+      return;
+    }
+    const lensNames = {"recruiter":"Recruiter","investor":"Investor","admissions":"Admissions",
+      "creator":"Creator","stranger":"Stranger","customer":"Customer","collaborator":"Collaborator",
+      "ad_platform":"Ad Platform","future_agent":"Future AI"};
+    let html = "";
+    for (const [lens, lensClaims] of Object.entries(byLens)) {
+      const lname = lensNames[lens] || lens;
+      html += `<div class="audience-section"><div class="audience-section-title">${esc(lname)} read</div>`;
+      for (const c of lensClaims.slice(0, 3)) {
+        const band = c.confidence_band || "medium";
+        const bandCls = `ws-conf-dot ${band === "high" ? "high" : band === "medium" ? "medium" : "low"}`;
+        html += `<div class="claims-item" style="padding:8px 0;border-bottom:1px solid var(--border-color, rgba(255,255,255,0.06))">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <span class="${bandCls}"></span>
+            <span style="font-size:11px;text-transform:uppercase;color:var(--muted)">${band} confidence</span>
+            <span class="ws-topic">${esc(c.severity||"low")}</span>
+          </div>
+          <p style="font-size:13px;line-height:1.5;color:var(--text);margin:0">${esc(c.claim||"")}</p>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+    body.innerHTML = html;
+  } catch (err) {
+    body.innerHTML = `<p class="muted">Could not load claims: ${esc(apiMsg(err))}</p>`;
+  }
+}
+
 async function openAudienceModal(audId = "recruiter") {
   const modal = ensureAudienceModal();
   modal.hidden = false;
@@ -6566,8 +7655,14 @@ async function openAudienceModal(audId = "recruiter") {
   const icon = modal.querySelector(".audience-modal-icon");
   const name = modal.querySelector(".audience-modal-name");
   const score = modal.querySelector(".audience-score-num");
-  const prof = state.audiences.find(a => a.id === audId) ||
-    defaultAudiences().find(a => a.id === audId) || defaultAudiences()[0];
+  const prof = state.audiences.find(a => a.id === audId) || null;
+  if (!prof) {
+    name.textContent = "Audience not available";
+    icon.textContent = "⚠️";
+    score.textContent = "--%";
+    body.innerHTML = `<p class="muted">No audience data loaded. Run a scan to generate audience signals.</p>`;
+    return;
+  }
   icon.textContent = prof.icon || "👤";
   name.textContent = prof.name || "Audience read";
   score.textContent = "--%";
@@ -6580,7 +7675,7 @@ async function openAudienceModal(audId = "recruiter") {
       `<span class="ws-topic">${esc(v)}</span>`).join("");
     const risks = (data.risks || []).map(v =>
       `<span class="ws-topic">${esc(v)}</span>`).join("");
-    score.textContent = `${Number(data.score || 0)}%`;
+    score.textContent = scorePct(data.score);
     body.innerHTML = `
       <div class="audience-section">
         <div class="audience-section-title">What they see</div>
@@ -6686,95 +7781,6 @@ function irisEntityFile(n) {
   streamIris(`What does this file reveal about me? Analyze "${n.label}" as an identity evidence entity.`);
 }
 
-function inferFromCluster(clusterId) {
-  const nodes = state.nodes.filter(n => n.cluster === clusterId);
-  if (!nodes.length) return;
-  nodes.sort((a, b) => b.degree - a.degree);
-  state.selected = nodes[0];
-  if (state.manager?.name !== "topology") state.manager.switch("topology");
-  renderPanel();
-  state.manager?.mode?.draw?.();
-}
-
-async function renderInference(force = false) {
-  const sel = syncSelected();
-  const panel = el.inspector.querySelector("#inferPanel");
-  if (!sel || !panel) return;
-  panel.innerHTML = `<p class="muted">Iris inference loading…</p>`;
-  const run = encodeURIComponent(state.run || "");
-  const cluster = encodeURIComponent(sel.cluster || "");
-  const q = force ? "&refresh=1" : "";
-  try {
-    const data = await getJson(`/api/infer?run=${run}&cluster=${cluster}${q}`);
-    drawInference(panel, data);
-  } catch (err) {
-    panel.innerHTML = `<p class="muted">Iris inference failed: ${esc(apiMsg(err))}</p>`;
-  }
-}
-
-function drawInference(panel, data) {
-  const claims = data.claims || [];
-  const by = {
-    behavior: claims.filter(c => c.family === "behavior"),
-    projects: claims.filter(c => c.family === "projects"),
-    risk: claims.filter(c => c.family === "risk"),
-  };
-  panel.innerHTML = `
-    <h3 class="panel-title" style="margin-top:12px">Iris inference</h3>
-    <div class="stat-grid">
-      <div class="stat-row"><span>Source</span><b>${esc(data.source || "n/a")}</b></div>
-      <div class="stat-row"><span>Claims</span><b>${claims.length}</b></div>
-      <div class="stat-row"><span>Model</span><b>${esc(data.model || "n/a")}</b></div>
-    </div>
-    <div class="chips" id="inferFilt" style="margin:8px 0 10px">
-      <button data-f=\"all\">All</button>
-      <button data-f=\"behavior\">Behavior</button>
-      <button data-f=\"projects\">Projects</button>
-      <button data-f=\"risk\">Risk</button>
-    </div>
-    <div id="inferClaims">${renderClaims(claims)}</div>`;
-  const filt = panel.querySelector("#inferFilt");
-  filt.addEventListener("click", ev => {
-    const btn = ev.target.closest("button[data-f]");
-    if (!btn) return;
-    const key = btn.dataset.f;
-    const vals = key === "all" ? claims : by[key] || [];
-    panel.querySelector("#inferClaims").innerHTML = renderClaims(vals);
-    bindInferEvidence(panel);
-  });
-  bindInferEvidence(panel);
-}
-
-function renderClaims(claims) {
-  if (!claims.length) return `<p class="muted">No inference claims for this cluster.</p>`;
-  return claims.map(cl => {
-    const conf = Math.round((cl.confidence || 0) * 100);
-    const sev = cl.severity ? ` · ${cl.severity}` : "";
-    const tent = cl.tentative ? " (tentative)" : "";
-    const ev = (cl.evidence || []).slice(0, 3).map(e =>
-      `<span class=\"msg-related-item\" data-id=\"${esc(e.id || "")}\" title=\"${esc(e.path || "")}\">${esc(base(e.path || "").slice(0, 24) || "evidence")} · ${Math.round((e.score || 0) * 100)}%</span>`
-    ).join("");
-    return `<div class="rename-card" style="margin-bottom:8px">
-      <p><b>${esc(cl.title || cl.category || "claim")}</b> · ${conf}%${sev}${tent}</p>
-      <p class="muted">${esc(cl.summary || "")}</p>
-      <div class="msg-related">${ev}</div>
-    </div>`;
-  }).join("");
-}
-
-function bindInferEvidence(panel) {
-  panel.querySelectorAll(".msg-related-item[data-id]").forEach(it => {
-    it.addEventListener("click", () => {
-      const nid = it.dataset.id;
-      const n = state.nodeById.get(nid);
-      if (!n) return;
-      state.selected = n;
-      renderPanel();
-      state.manager?.mode?.draw?.();
-    });
-  });
-}
-
 function showSimilar() {
   const n = state.selected;
   if (!n) return;
@@ -6813,8 +7819,8 @@ function showSimilar() {
     </div>`;
   el.inspector.querySelector("#backToFile").onclick = () => renderPanel();
   el.inspector.querySelector("#switchToMap").onclick = () => {
-    if (state.manager.name !== "topology") state.manager.switch("topology");
-    else state.manager.mode.draw();
+    if (state.manager?.name !== "topology") state.manager?.switch("topology");
+    else state.manager?.mode?.draw?.();
   };
   el.inspector.querySelector("#askIrisSimilar")?.addEventListener("click", () => {
     const names = connected.slice(0, 6).map(c => c.node.label).join(", ");
@@ -6912,6 +7918,154 @@ async function chip(ev) {
   }
   await streamIris(q);
 }
+
+// ─── Iris V1 Ask (audit-aware, non-streaming) ─────────────────────────────────
+
+async function irisAskV1(q) {
+  if (state.irisStreaming) abortActiveIris();
+  const reqSeq = state.irisReqSeq + 1;
+  state.irisReqSeq = reqSeq;
+  state.irisStreaming = true;
+  syncChatSend();
+
+  const feed = activeIrisFeed();
+  const empty = feed.querySelector(".iris-inline-empty");
+  if (empty) empty.remove();
+
+  // User bubble
+  const userDiv = document.createElement("div");
+  userDiv.className = "msg user";
+  userDiv.textContent = q;
+  feed.appendChild(userDiv);
+
+  // Dismiss welcome message on first real interaction
+  const welcome = feed.querySelector(".msg-welcome");
+  if (welcome) welcome.remove();
+
+  // Assistant bubble with loading spinner (frost-glass)
+  const botDiv = document.createElement("div");
+  botDiv.className = "msg assistant iris-loading";
+  const contentEl = document.createElement("div");
+  contentEl.className = "iris-content";
+  const spinner = document.createElement("span");
+  spinner.className = "iris-spinner frost-glass-spin";
+  spinner.innerHTML = `<span class="iris-dot-pulse">
+    <span class="iris-dot"></span><span class="iris-dot"></span><span class="iris-dot"></span>
+  </span>`;
+  contentEl.appendChild(spinner);
+  botDiv.appendChild(contentEl);
+  feed.appendChild(botDiv);
+  feed.scrollTop = feed.scrollHeight;
+
+  try {
+    const resp = await fetch("/api/v1/iris/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        q,
+        run: activeRun(),
+        mode: state.irisMode || "report",
+        history: compactIrisHistory(state.irisHistory),
+        selected_ids: state.irisEntityIds.slice(0, 6),
+        audience: state.irisAudience || "recruiter",
+      }),
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const data = await resp.json();
+    const answer = String(data?.answer || "").trim();
+    const claims = Array.isArray(data?.claims) ? data.claims : [];
+    const risks = Array.isArray(data?.risks) ? data.risks : [];
+    const repairs = Array.isArray(data?.repairs) ? data.repairs : [];
+
+    // Remove spinner
+    spinner.remove();
+    botDiv.classList.remove("iris-loading");
+
+    // Render markdown answer
+    if (answer) {
+      state.irisErrStreak = 0;
+      if (window.marked) {
+        contentEl.innerHTML = mdHtml(answer);
+      } else {
+        contentEl.textContent = answer;
+      }
+    } else {
+      state.irisErrStreak += 1;
+      contentEl.textContent = "(no response)";
+    }
+
+    // Render cited claims/risks/repairs as frost-glass cards
+    if (claims.length || risks.length || repairs.length) {
+      const citeBlock = document.createElement("div");
+      citeBlock.className = "iris-cite-block frost-glass-inset";
+
+      if (claims.length) {
+        const claimSection = document.createElement("div");
+        claimSection.className = "iris-cite-section";
+        claimSection.innerHTML = `<div class="iris-cite-label">📋 Claims</div>` +
+          claims.map(c => `<div class="iris-cite-item" data-cite-id="${esc(c.id)}">
+            <span class="iris-cite-id">${esc(c.id)}</span>
+            <span class="iris-cite-desc">${esc(c.description)}</span>
+            <span class="iris-cite-src">${esc(c.source)}</span>
+          </div>`).join("");
+        citeBlock.appendChild(claimSection);
+      }
+
+      if (risks.length) {
+        const riskSection = document.createElement("div");
+        riskSection.className = "iris-cite-section";
+        const sevIcon = { critical: "🔴", high: "🟠", medium: "🟡", low: "🟢" };
+        riskSection.innerHTML = `<div class="iris-cite-label">⚠️ Risks</div>` +
+          risks.map(r => `<div class="iris-cite-item" data-cite-id="${esc(r.id)}">
+            <span class="iris-cite-id">${esc(r.id)}</span>
+            <span class="iris-cite-sev">${sevIcon[r.severity] || "⚪"} ${esc(r.severity)}</span>
+            <span class="iris-cite-desc">${esc(r.description)}</span>
+            <span class="iris-cite-src">${esc(r.source)}</span>
+          </div>`).join("");
+        citeBlock.appendChild(riskSection);
+      }
+
+      if (repairs.length) {
+        const repairSection = document.createElement("div");
+        repairSection.className = "iris-cite-section";
+        repairSection.innerHTML = `<div class="iris-cite-label">🔧 Repairs</div>` +
+          repairs.map(r => `<div class="iris-cite-item" data-cite-id="${esc(r.id)}">
+            <span class="iris-cite-id">${esc(r.id)}</span>
+            <span class="iris-cite-desc">${esc(r.action)}</span>
+            <span class="iris-cite-src">${esc(r.source)}</span>
+          </div>`).join("");
+        citeBlock.appendChild(repairSection);
+      }
+
+      botDiv.appendChild(citeBlock);
+    }
+
+    // Push to multi-turn history
+    state.irisHistory.push({ role: "user", content: q.slice(0, 1800) });
+    state.irisHistory.push({
+      role: "assistant",
+      content: String(answer || "").slice(0, 2400),
+    });
+    if (state.irisHistory.length > 24) state.irisHistory.splice(0, 4);
+
+  } catch (err) {
+    spinner.remove();
+    botDiv.classList.remove("iris-loading");
+    const msg = apiMsg(err);
+    contentEl.textContent = `Iris is unavailable: ${msg}. Make sure the server is running.`;
+    state.irisErrStreak += 1;
+  }
+
+  if (reqSeq === state.irisReqSeq) {
+    state.irisAbort = null;
+    state.irisStreaming = false;
+    syncChatSend();
+  }
+  feed.scrollTop = feed.scrollHeight;
+}
+
 
 // ─── Iris streaming engine ────────────────────────────────────────────────────
 
@@ -7114,19 +8268,6 @@ function finishToolCard(card, preview, resultLen) {
   }
 }
 
-// ─── Legacy ask() for rename + old APIs ──────────────────────────────────────
-async function sendPrompt(q) {
-  // Legacy: plain text, no streaming. Used internally.
-  addMsg(q, "user");
-  try {
-    const res = await ask(q, kindFrom(q));
-    const answer = res.answer || "No answer returned.";
-    addMsg(answer, "assistant", res.related || []);
-  } catch (err) {
-    addMsg(assistantErr(err), "assistant");
-  }
-}
-
 async function ask(q, kind = "question") {
   const node = syncSelected() || state.nodes[0];
   let enrichedQ = q;
@@ -7178,12 +8319,6 @@ function addMsg(txt, who, related = []) {
   el.messages.appendChild(div);
   el.messages.scrollTop = el.messages.scrollHeight;
   return div;
-}
-
-function kindFrom(q) {
-  if (/rename|name/i.test(q)) return "rename";
-  if (/similar|near/i.test(q)) return "similar";
-  return "question";
 }
 
 function tooltip(ev, n) {
@@ -7561,20 +8696,68 @@ function mdHtml(txt) {
 }
 
 function sanitizeHtml(raw) {
+  const ALLOWED_TAGS = new Set([
+    "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "ul", "ol", "li", "a", "strong", "em", "b", "i", "u",
+    "code", "pre", "blockquote", "br", "hr",
+    "table", "thead", "tbody", "tr", "th", "td",
+    "img", "span", "div", "sub", "sup", "dl", "dt", "dd",
+    "small", "mark", "del", "ins", "abbr",
+  ]);
+  // URI-scheme blocklist — checked after lowercasing
+  const BLOCKED_SCHEMES = /^(javascript|data|vbscript):/i;
+  function _isDangerousURI(val) {
+    // Decode HTML entities and URL encoding before checking
+    const dec = val
+      .replace(/&#x?[0-9a-f]+;/gi, "")
+      .replace(/&[a-z]+;/gi, "")
+      .trim().toLowerCase();
+    return BLOCKED_SCHEMES.test(dec) || dec.includes("javascript:");
+  }
   const tpl = document.createElement("template");
   tpl.innerHTML = String(raw || "");
-  const bad = "script,style,iframe,object,embed,link,meta,base";
-  tpl.content.querySelectorAll(bad).forEach(el => el.remove());
-  tpl.content.querySelectorAll("*").forEach(el => {
-    for (const attr of [...el.attributes]) {
-      const key = attr.name.toLowerCase();
-      const val = String(attr.value || "").trim().toLowerCase();
-      if (key.startsWith("on")) el.removeAttribute(attr.name);
-      if ((key === "href" || key === "src") && val.startsWith("javascript:")) {
-        el.removeAttribute(attr.name);
+  // Walk the tree: strip disallowed elements, push their children up
+  function walk(node) {
+    const toStrip = [];
+    for (const child of node.childNodes) {
+      if (child.nodeType === 1) { // Element node
+        if (!ALLOWED_TAGS.has(child.tagName.toLowerCase())) {
+          while (child.firstChild) {
+            node.insertBefore(child.firstChild, child);
+          }
+          toStrip.push(child);
+        } else {
+          // Strip dangerous attributes
+          for (const attr of [...child.attributes]) {
+            const key = attr.name.toLowerCase();
+            const val = String(attr.value || "").trim();
+            // Event handlers
+            if (key.startsWith("on")) { child.removeAttribute(attr.name); continue; }
+            // Dangerous URI attributes
+            if (key === "href" || key === "src" || key === "formaction" || key === "action") {
+              if (_isDangerousURI(val)) { child.removeAttribute(attr.name); }
+              continue;
+            }
+            // Srcdoc
+            if (key === "srcdoc") { child.removeAttribute(attr.name); continue; }
+            // CSS with expressions or bindings
+            if (key === "style") {
+              const sv = val.toLowerCase();
+              if (/expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding\s*:/.test(sv)) {
+                child.setAttribute("style", val.replace(
+                  /expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding\s*:/gi,
+                  "blocked:"
+                ));
+              }
+            }
+          }
+          walk(child);
+        }
       }
     }
-  });
+    for (const el of toStrip) el.remove();
+  }
+  walk(tpl.content);
   return tpl.innerHTML;
 }
 
@@ -7582,6 +8765,25 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, ch => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[ch]));
+}
+
+function scorePct(v) {
+  // Honest score display: null/undefined → "--", otherwise → "N%"
+  if (v === null || v === undefined || (typeof v === "number" && isNaN(v))) return "--";
+  return `${Math.round(Number(v))}%`;
+}
+
+function scoreNum(v) {
+  // Honest numeric score: null/undefined → null, otherwise → rounded int
+  if (v === null || v === undefined || (typeof v === "number" && isNaN(v))) return null;
+  return Math.round(Number(v));
+}
+
+function scoreLabel(v) {
+  // Honest confidence label: only when real data exists
+  const n = scoreNum(v);
+  if (n === null) return "";
+  return n >= 75 ? "High" : n >= 50 ? "Moderate" : "Watch";
 }
 
 function apiCode(err) {
@@ -7624,7 +8826,7 @@ async function readJson(res) {
   try {
     return JSON.parse(txt);
   } catch (_) {
-    return { err: txt };
+    throw new Error(`Invalid JSON response (${res.status}): ${txt.slice(0, 200)}`);
   }
 }
 
@@ -8088,11 +9290,16 @@ async function postJson(url, data) {
   }
 
   async function queueDigestNow() {
+    const email = state.account?.account?.email || "";
+    if (!email) {
+      setDigestMsg("No account email configured. Add an email address in your account settings first.", true);
+      return;
+    }
     try {
       await postJson("/api/integrations/jobs", {
         kind: "email",
         payload: {
-          to: state.account?.account?.email || "team@local",
+          to: email,
           subject: "Optic digest · manual run",
           body: "Manual digest run queued from settings.",
           meta: { source: "settings_manual_digest" },
@@ -8216,3 +9423,164 @@ async function postJson(url, data) {
     return encodeURIComponent(String(txt || ""));
   }
 })();
+
+// ─── OnboardingMode ───────────────────────────────────────────────────────────
+// 7-step white frost-glass onboarding overlay.  Appears on first visit when
+// no user profile exists.  Uses the existing app shell, calls real
+// /api/v1/onboarding endpoints, and persists state through the V1 API.
+
+// ── Streamlined onboarding (3 steps: welcome → scan → done) ───────────
+
+class OnboardingMode {
+  constructor() {
+    this.container = null;
+    this.step = 1;
+    this.completed = false;
+    this.scanning = false;
+    this.fileCount = 0;
+    this.scanError = null;
+    this._onClick = ev => this.onClick(ev);
+  }
+
+  async mount(container) {
+    this.container = container;
+    this.step = 1;
+    this.render();
+  }
+
+  unmount() {
+    this.container?.removeEventListener("click", this._onClick);
+    if (this.container) this.container.innerHTML = "";
+  }
+
+  onClick(ev) {
+    const btn = ev.target.closest("[data-onb]");
+    if (!btn) return;
+    switch (btn.dataset.onb) {
+      case "start": return this.startScan();
+      case "skip":  return this.finish();
+      case "done":  return this.finish();
+    }
+  }
+
+  async startScan() {
+    if (this.scanning) return;
+    this.scanning = true;
+    this.scanError = null;
+    this.step = 2;
+    this.render();
+    // Start the real scan
+    try {
+      await postJson("/api/scan", { folders: [state.homeData?.home || "~"] });
+    } catch (err) {
+      console.warn("Onboard scan trigger failed:", err);
+      this.scanError = err.message || String(err);
+      this.scanning = false;
+      this.render();
+      return;
+    }
+    // Poll for results — the scan + audit may take a moment
+    this.pollResults();
+  }
+
+  async pollResults() {
+    let consecutiveErrors = 0;
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const data = await getJson("/api/v1/status");
+        consecutiveErrors = 0;
+        this.fileCount = data.claims || data.reports || data.risks || 0;
+        if (this.fileCount > 10 || data.status === "running" && data.reports > 0) {
+          // Scan complete, transition to done
+          this.step = 3;
+          this.render();
+          await new Promise(r => setTimeout(r, 1500));
+          await this.finish();
+          return;
+        }
+      } catch (_) {
+        consecutiveErrors++;
+      }
+      // If we get too many consecutive errors, show error state
+      if (consecutiveErrors >= 5) {
+        this.scanError = "Could not reach audit engine. Check that the backend is running.";
+        this.scanning = false;
+        this.render();
+        return;
+      }
+      // Update progress
+      const el = this.container?.querySelector(".onb-progress-count");
+      if (el) el.textContent = `Scanned ${Math.min(i * 200, 6000).toLocaleString()} files…`;
+    }
+    // Polling timed out — still transition
+    this.step = 3;
+    this.render();
+    await new Promise(r => setTimeout(r, 1200));
+    await this.finish();
+  }
+
+  async finish() {
+    this.completed = true;
+    localStorage.setItem("optic_onboarded", "1");
+    state.manager.switch("workstreams");
+  }
+
+  render() {
+    if (!this.container) return;
+    this.container.removeEventListener("click", this._onClick);
+    this.container.addEventListener("click", this._onClick, { once: false });
+
+    if (this.step === 1) {
+      // Welcome
+      this.container.innerHTML = `<div class="onb-overlay">
+        <div class="onb-card glass" style="max-width:540px">
+          <div class="onb-brand">Optic</div>
+          <h2 class="onb-title">Understand what your files reveal</h2>
+          <p>Optic scans your local files to surface what humans and algorithms can infer about you. Everything stays on-device — nothing is ever uploaded.</p>
+          <div class="onb-features">
+            <span>🔒 Private & local</span>
+            <span>📊 9 audience lenses</span>
+            <span>⚡ Instant scan</span>
+          </div>
+          <button class="onb-cta" data-onb="start">Scan my files →</button>
+          <button class="onb-link" data-onb="skip">Skip for now</button>
+        </div>
+      </div>`;
+    } else if (this.step === 2) {
+      // Scanning
+      if (this.scanError) {
+        // Error state
+        this.container.innerHTML = `<div class="onb-overlay">
+          <div class="onb-card glass" style="max-width:480px;text-align:center">
+            <div class="onb-err-icon">⚠️</div>
+            <h2 class="onb-title">Scan failed</h2>
+            <p class="onb-err-msg">${esc(this.scanError)}</p>
+            <button class="onb-cta" data-onb="start">Try again</button>
+            <button class="onb-link" data-onb="skip">Skip for now</button>
+          </div>
+        </div>`;
+        return;
+      }
+      this.container.innerHTML = `<div class="onb-overlay">
+        <div class="onb-card glass" style="max-width:480px;text-align:center">
+          <div class="onb-spinner"></div>
+          <h2 class="onb-title">Scanning your files</h2>
+          <p>Reading from Desktop, Documents, and Downloads...</p>
+          <div class="onb-progress-bar"><div class="onb-progress-fill"></div></div>
+          <p class="onb-progress-count">Starting scan…</p>
+        </div>
+      </div>`;
+    } else {
+      // Done
+      this.container.innerHTML = `<div class="onb-overlay">
+        <div class="onb-card glass" style="max-width:480px;text-align:center">
+          <div class="onb-check">✓</div>
+          <h2 class="onb-title">Analysis complete</h2>
+          <p>${this.fileCount.toLocaleString()} inference claims generated from your files. Your dashboard is ready.</p>
+          <button class="onb-cta" data-onb="done">See my results →</button>
+        </div>
+      </div>`;
+    }
+  }
+}

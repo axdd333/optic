@@ -9,6 +9,7 @@ const exact = {
   "/legal": "legal.html",
   "/legal/": "legal.html",
   "/notice-at-collection": "legal-notice.html",
+  "/optic-interactive.html": "optic-interactive.html",
   "/optic-investors.html": "optic-investors.html",
   "/optic.html": "optic.html",
   "/privacy": "legal-privacy.html",

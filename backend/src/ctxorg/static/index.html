@@ -51,29 +51,29 @@
       </header>
 
       <!-- LEFT SIDEBAR: context nav -->
-      <nav class="leftnav" aria-label="Primary navigation"
+      <nav class="left-nav" aria-label="Primary navigation"
         data-nav-model="primary">
-        <div class="leftnav-heading">Overview</div>
-        <div class="leftnav-primary">
-          <button class="leftnav-item active" data-mode="workstreams">
+        <div class="left-nav-heading">Overview</div>
+        <div class="left-nav-primary">
+          <button class="left-nav-item active" data-mode="workstreams">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M2 6.5L8 2l6 4.5V14H2V6.5z"/>
             </svg>
             <span>Home</span>
           </button>
-          <button class="leftnav-item" data-mode="topology">
+          <button class="left-nav-item" data-mode="topology">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/>
             </svg>
             <span>Map</span>
           </button>
-          <button class="leftnav-item" data-mode="timeline">
+          <button class="left-nav-item" data-mode="timeline">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <line x1="2" y1="5" x2="14" y2="5"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="11" x2="14" y2="11"/>
             </svg>
             <span>Timeline</span>
           </button>
-          <button class="leftnav-item" data-mode="universe">
+          <button class="left-nav-item" data-mode="universe">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/>
               <rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>
@@ -82,31 +82,31 @@
           </button>
         </div>
 
-        <div class="leftnav-divider"></div>
+        <div class="left-nav-divider"></div>
 
-        <div class="leftnav-heading">Data &amp; tools</div>
-        <div class="leftnav-secondary">
-          <button class="leftnav-item" data-mode="iris">
+        <div class="left-nav-heading">Data &amp; tools</div>
+        <div class="left-nav-secondary">
+          <button class="left-nav-item" data-mode="iris">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="8" cy="8" r="5.5"/><line x1="8" y1="5" x2="8" y2="8.5"/><line x1="8" y1="8.5" x2="10.5" y2="10"/>
             </svg>
             <span>Iris</span>
           </button>
-          <button class="leftnav-item" data-mode="vault">
+          <button class="left-nav-item" data-mode="vault">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <rect x="2" y="4" width="12" height="9" rx="1.5"/><line x1="5" y1="4" x2="5" y2="2"/><line x1="11" y1="4" x2="11" y2="2"/>
             </svg>
             <span>Vault</span>
-            <span class="leftnav-chip">Local</span>
+            <span class="left-nav-chip">Local</span>
           </button>
-          <button class="leftnav-item" data-mode="audiences">
+          <button class="left-nav-item" data-mode="audiences">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="5.5" cy="6" r="2.5"/><circle cx="10.5" cy="6" r="2.5"/>
               <path d="M1 13c0-2 2-3.5 4.5-3.5S9 11 10.5 11s3.5-1 3.5-3.5"/>
             </svg>
             <span>Audiences</span>
           </button>
-          <button class="leftnav-item" data-mode="simulations">
+          <button class="left-nav-item" data-mode="simulations">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
               stroke="currentColor" stroke-width="1.5">
               <path d="M5 2h6M4 2h8M6 6h4l3 6H3l3-6z"/>
@@ -114,8 +114,8 @@
             </svg>
             <span>Simulations</span>
           </button>
-          <div class="leftnav-divider"></div>
-          <button class="leftnav-item" data-mode="exports">
+          <div class="left-nav-divider"></div>
+          <button class="left-nav-item" data-mode="exports">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
               stroke="currentColor" stroke-width="1.5">
               <path d="M8 12V3"/><path d="M5 6l3-3 3 3"/>
@@ -123,8 +123,8 @@
             </svg>
             <span>Exports</span>
           </button>
-          <div class="leftnav-heading leftnav-heading--inline">System</div>
-          <button id="leftnavSettingsBtn" class="leftnav-item"
+          <div class="left-nav-heading left-nav-heading--inline">System</div>
+          <button id="leftnavSettingsBtn" class="left-nav-item"
             type="button" aria-label="Open settings"
             data-settings-entry="primary">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
@@ -135,7 +135,7 @@
             </svg>
             <span>Settings</span>
           </button>
-          <button class="leftnav-item leftnav-item--dim">
+          <button class="left-nav-item left-nav-item--dim">
             <svg class="nav-ico" viewBox="0 0 16 16" fill="none"
               stroke="currentColor" stroke-width="1.4">
               <circle cx="8" cy="8" r="6"/>
@@ -145,8 +145,8 @@
           </button>
         </div>
 
-        <div class="leftnav-footer">
-          <div class="leftnav-privacy">
+        <div class="left-nav-footer">
+          <div class="left-nav-privacy">
             <span class="privacy-dot"></span>
             <div>
               <div class="privacy-title">Local vault</div>
@@ -437,7 +437,6 @@
               <option value="adversarial">Adversarial</option>
               <option value="algorithm">Algorithm (ATS)</option>
               <option value="professor">Professor</option>
-              <option value="lender">Lender</option>
             </select>
           </div>
           <div id="messages" class="messages"></div>

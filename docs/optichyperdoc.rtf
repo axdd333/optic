@@ -1,0 +1,581 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2870
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\froman\fcharset0 Times-Roman;\f1\froman\fcharset0 Times-Bold;\f2\fmodern\fcharset0 Courier;
+}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\margl1440\margr1440\vieww29200\viewh15620\viewkind0
+\deftab720
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\fs24 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Send this. This is the bigger hammer: 
+\f1\b Hermes should treat this as a build contract, not inspiration.
+\f0\b0  It must build locally first, wire the V1 package into the existing ctxorg server, implement full Optic V1.0, prepare clean AWS migration paths, and only stop to notify you when it needs external API credentials. The original Optic spine is already in the uploaded baseline: consent-first, source ledger, evidence graph, audience lenses, inference cards, contradictions, repair queue, report/export, and no eligibility/dossier bullshit.\
+\pard\pardeftab720\sa321\partightenfactor0
+
+\f1\b\fs48 \cf0 Hermes Master Directive: Build Optic V1.0 Entirely, Locally First, AWS-Ready\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 You are building 
+\f1\b Optic V1.0
+\f0\b0 , the complete local-first inference audit application. This is not a prototype. This is not a UI pass. This is not \'93wire one endpoint and call it done.\'94 You must build the whole thing into the existing working ctxorg system, using the newly built V1 package as the canonical intelligence layer. Your task is to inspect the repo, understand what already exists, preserve the working pieces, integrate the V1 package, build all missing product surfaces, add durable persistence, implement full local inference flow, prepare AWS-compatible abstractions, and verify the complete application end-to-end.\
+Do not ask the user for direction except when an external API key, OAuth credential, paid provider account, or platform token is required. If a feature can be built locally, build it. If a feature needs an API key, build the adapter, build the disabled/missing-key UI state, document the required key, and notify the user only for that key. Do not stop the whole build because GitHub, Google, Brave Search, SerpAPI, AWS, or OAuth credentials are missing. Build the local route first. Build the connector interface. Make the app work without the key. Then surface the missing key requirement cleanly.\
+Existing system state: there is a working ctxorg server that scans the filesystem, finds roughly 115k files, clusters them into about 30 workstreams, uses Ollama with 
+\f2\fs26 phi4-mini
+\f0\fs24  through Iris chat, exposes a heuristic audiences endpoint, has a home panel with narratives, exposures, file counts, topology graph, settings, and a vanilla JS frontend. It has no real auth, no consent ledger, no structured inference, no repair engine, and no onboarding flow. Separately, there is a V1 package that includes 14 data models, 9 audience lenses with full configs, contradiction engine with 5 detection types, and an evidence-gated inference card generator with confidence bands. These two systems must become one coherent application. The V1 package must not sit beside the product like a ceremonial sword. It must become the active reasoning spine.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 1. The product you are building\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Optic V1.0 is a local-first personal inference audit system. The user opens the app, completes onboarding, approves source scope, selects workstreams and evidence sources, selects audience lenses, runs an audit, watches the pipeline progress, reviews evidence-backed inference cards, inspects contradictions, sees risks and exposures, receives a prioritized repair queue, explores the evidence topology, asks Iris questions over the audit context, exports a report, reloads the app, and everything persists.\
+The complete loop must work locally. Local means the application can run on the developer machine using the current ctxorg filesystem scanner, local storage/database, local Ollama where available, and no mandatory cloud API. Cloud connectors may be prepared, but they must not be required for the core V1.0 loop. External connectors are additive. The local filesystem/workstream graph is the first-class native substrate.\
+The product must enforce the Optic doctrine through architecture: subject-owned, consent-scoped, evidence-gated, confidence-banded, repair-oriented, not a background check, not a third-party people-search engine, not an applicant ranking tool, not a credit/employment/tenant/insurance eligibility system. Build this into data models, UI language, route behavior, export metadata, and refusal boundaries.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 2. The core technical object: Evidence-linked claim\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 The central object in Optic is not a report, not a chat response, not a graph node, not a generic summary. The central object is an 
+\f1\b Evidence-Linked Claim
+\f0\b0 .\
+A valid inference card must include: unique ID, audit run ID, audience lens ID, claim title, claim body, confidence band, numerical confidence proxy if already supported, supporting evidence references, weakening evidence references or declared absence, source/workstream references, generated timestamp, model or engine version, severity, actionability, risk links, contradiction links, repair links, and explanation of why this claim exists. If the evidence gate fails, the card must not be created. If the card exists without evidence, that is a bug. Fix it.\
+Every major downstream feature must depend on this object: report sections, Iris audit chat, repair engine, risk dashboard, graph overlays, exports, and future monitoring. Do not allow a freeform LLM summary to bypass the claim layer. Summaries can explain claim clusters, but they cannot invent claims.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 3. TGA: Trace Graph Algebra\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Implement Optic around a formal internal model called 
+\f1\b TGA: Trace Graph Algebra
+\f0\b0 . TGA is the mathematical substrate that turns raw traces into structured evidence, evidence into signals, signals into claims, claims into contradictions, contradictions into risks, and risks into repairs. You do not need to expose the math to users, but the code structure should reflect it.\
+Represent the user\'92s digital surface as a typed attributed multigraph:\
+G = (V, E, T, A, S)\
+Where V is the set of typed nodes, E is the set of typed directed edges, T maps each node and edge to a type, A maps nodes and edges to attributes, and S maps nodes and edges to source provenance. Nodes include UserProfile, Source, Workstream, Artifact, ParsedSpan, Entity, Topic, Signal, AudienceLens, InferenceClaim, Contradiction, RiskFlag, RepairAction, ReportSnapshot, ConsentReceipt, and ExportArtifact. Edges include contains, derived_from, mentions, supports, weakens, contradicts, visible_to, risky_for, repaired_by, included_in_report, scoped_by_consent, generated_by, and revoked_by.\
+Each artifact a has provenance p(a), source type \uc0\u964 (a), visibility \u957 (a), recency r(a), reliability \u961 (a), and sensitivity \u963 (a). Each parsed span s inherits provenance from its artifact and receives text/media features. Each signal z is a function over one or more spans, artifacts, or graph neighborhoods. Each inference claim c is a function of signals, audience lens, evidence, and safety constraints.\
+Use these internal scoring primitives, even if approximated in V1.0:\
+Evidence weight:\
+w_e = source_reliability \'d7 visibility_relevance \'d7 recency_decay \'d7 extraction_quality \'d7 directness \'d7 audience_relevance\
+Recency decay:\
+r(t) = exp(-\uc0\u955  \'d7 age_days)\
+or use bucketed decay if simpler: fresh, recent, stale, archival.\
+Claim support:\
+Support(c) = \uc0\u931  w_e over evidence items supporting c\
+Claim opposition:\
+Oppose(c) = \uc0\u931  w_e over evidence items weakening c\
+Claim confidence:\
+Conf(c) = sigmoid(\uc0\u945  \'d7 Support(c) - \u946  \'d7 Oppose(c) - \u947  \'d7 MissingContext(c) - \u948  \'d7 ContradictionPenalty(c))\
+Confidence band:\
+low if Conf(c) below low threshold, medium if within middle threshold, high if above high threshold. Do not show fake hyper-precision in the UI. Internally you may store numeric confidence, but user-facing output should remain banded unless debug mode is active.\
+Audience lens vector:\
+L_a = \{priority weights, evidence preferences, false positive sensitivities, risk tolerance, repair preference, forbidden inference classes\}\
+Audience-conditioned claim score:\
+Score(c, a) = Conf(c) \'d7 Relevance(c, L_a) \'d7 Severity(c, L_a) \'d7 Visibility(c, a)\
+Contradiction operator:\
+Contradict(x, y) = true when two claims, signals, spans, or source assertions cannot comfortably coexist under the same audience/time/source assumptions.\
+Contradiction severity:\
+Severity(k) = confidence_of_conflict \'d7 importance_to_audience \'d7 source_reliability \'d7 visibility \'d7 repairability_modifier\
+Repair priority:\
+Priority(repair) = impact \'d7 confidence \'d7 audience_importance \'d7 urgency \'d7 reversibility \'f7 effort\
+If exact numeric scoring is too heavy for existing package structure, implement the shape: store support, opposition, recency, severity, confidence band, evidence count, missing context, and repair priority. Do not flatten everything into a string.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 4. Local-first architecture\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Build V1.0 so it works fully on the local machine first. The app must not require cloud deployment, cloud database, external search API, or remote LLM to complete the core flow. It should use the existing ctxorg filesystem scan, workstream clustering, local server, local frontend, and Ollama where available. If Ollama or 
+\f2\fs26 phi4-mini
+\f0\fs24  is missing, show model-unavailable states and allow non-LLM structural views to work.\
+Use the current app\'92s stack unless migration is obviously necessary. Do not rewrite the app into Next/FastAPI just because that would be ideal in a clean-room build. This task is integration-first. Preserve the existing server, routes, frontend, topology graph, settings, Iris chat, and scanning system. Add V1.0 architecture around it. If the current app is Node/Express, build within that. If it is Python, build within that. If storage is currently JSON, SQLite, or a local project store, use the simplest durable local store that supports persistence and future migration. The right move is not aesthetic purity. The right move is a complete working loop.\
+That said, structure the implementation so it can later migrate to AWS cleanly. Create internal boundaries: SourceProvider, ArtifactStore, GraphStore, InferenceEngine, ModelProvider, SearchProvider, ExportProvider, ConsentStore, ReportStore, RepairStore. The local implementations can use filesystem/SQLite/JSON/Ollama. Future AWS implementations can use S3, RDS Postgres, pgvector/OpenSearch, ECS/Lambda, SQS/EventBridge, Bedrock/OpenAI-compatible model gateway, and CloudWatch. Do not hardwire local paths into business logic. Wrap them.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 5. AWS migration preparation\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Do not deploy to AWS now unless the repo already contains a deploy path and the user explicitly requests it. But prepare the architecture so AWS migration is straightforward.\
+Design local-to-AWS mapping:\
+Local artifact storage maps to S3 encrypted buckets.\
+Local JSON/SQLite/Postgres maps to RDS Postgres.\
+Local vector index maps to pgvector on RDS, OpenSearch vector, or Aurora Postgres with pgvector.\
+Local job runner maps to SQS + ECS workers, Lambda for light jobs, or Step Functions for workflows.\
+Local Ollama model provider maps to Bedrock, SageMaker endpoint, OpenAI-compatible hosted provider, or self-hosted GPU endpoint.\
+Local logs map to CloudWatch.\
+Local secrets map to AWS Secrets Manager or SSM Parameter Store.\
+Local encryption keys map to KMS.\
+Local export folder maps to S3 export bucket with signed URLs.\
+Local web server maps to ECS/Fargate, App Runner, or EC2.\
+Local frontend maps to S3/CloudFront or Amplify if static, or ECS/Vercel if dynamic.\
+Local auth maps to Cognito, Clerk, Auth.js, or custom OIDC later.\
+Build environment config now: 
+\f2\fs26 LOCAL_MODE
+\f0\fs24 , 
+\f2\fs26 DATA_DIR
+\f0\fs24 , 
+\f2\fs26 DATABASE_URL
+\f0\fs24 , 
+\f2\fs26 ARTIFACT_STORE
+\f0\fs24 , 
+\f2\fs26 OLLAMA_BASE_URL
+\f0\fs24 , 
+\f2\fs26 MODEL_PROVIDER
+\f0\fs24 , 
+\f2\fs26 SEARCH_PROVIDER
+\f0\fs24 , 
+\f2\fs26 EXPORT_DIR
+\f0\fs24 , 
+\f2\fs26 ENABLE_EXTERNAL_SCRAPERS
+\f0\fs24 , 
+\f2\fs26 ENABLE_CLOUD_CONNECTORS
+\f0\fs24 , 
+\f2\fs26 AWS_REGION
+\f0\fs24 , 
+\f2\fs26 S3_BUCKET
+\f0\fs24 , 
+\f2\fs26 KMS_KEY_ID
+\f0\fs24 , 
+\f2\fs26 GITHUB_TOKEN
+\f0\fs24 , 
+\f2\fs26 GOOGLE_CLIENT_ID
+\f0\fs24 , 
+\f2\fs26 GOOGLE_CLIENT_SECRET
+\f0\fs24 , 
+\f2\fs26 BRAVE_SEARCH_API_KEY
+\f0\fs24 , 
+\f2\fs26 SERPAPI_KEY
+\f0\fs24 , 
+\f2\fs26 TAVILY_API_KEY
+\f0\fs24 , etc. Do not require these variables to run local V1.0. Missing optional variables should disable corresponding adapters with clear UI status.\
+Prepare infra docs or config stubs if appropriate, but do not spend the whole build writing Terraform while the app itself is broken. Product loop first, migration path second.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 6. Persistence requirements\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 The app must persist everything needed to reload the product state. At minimum persist: local user/profile, onboarding state, consent receipts, source registry, workstream registry, artifact references, parsed evidence summaries, selected audience lenses, audit config, audit runs, audit status, inference cards, contradictions, risks/exposures, repair actions, reports, exports, model settings, and UI settings.\
+If the current ctxorg app already has persistent storage, extend it. If not, add a simple local database. SQLite is acceptable for local V1.0. Version the schema. Create migrations or a schema initialization routine. Do not rely on in-memory arrays. Do not store the entire product state in frontend localStorage except lightweight UI preferences. The backend must be the source of truth.\
+Every audit run should be a snapshot. A report generated today should not silently mutate tomorrow because the filesystem changed. If the user rescans, create a new audit run or update source freshness explicitly. Reports must be reopenable from history.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 7. Onboarding flow\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Build onboarding as a real state machine, not a decorative slideshow.\
+Required onboarding steps:\
+Step 1: Welcome and product boundary. Explain Optic is local-first self-audit, not a third-party evaluator.\
+Step 2: Local profile setup. Create local user/profile object. In single-user local mode, this can be simple: display name, optional handle, optional goal, local workspace name.\
+Step 3: Data scope explanation. Explain what sources exist from ctxorg scan: files, workstreams, narratives, exposures, topology.\
+Step 4: Source approval. Let user approve all workstreams or select specific workstreams. This writes consent receipts.\
+Step 5: Audience selection. Load the 9 configured V1 audience lenses from the package, not hardcoded frontend strings. Allow multi-select.\
+Step 6: Inference mode selection. Options can include quick, standard, deep. If only one mode works, use standard but structure for future modes.\
+Step 7: Model check. Verify Ollama status and configured model availability. If unavailable, show what will be limited.\
+Step 8: Run initial audit. Create an audit run and start pipeline.\
+Onboarding completion must persist. If the user refreshes, they resume where they left off. If onboarding is complete, dashboard should show audit status and next action. The user should be able to revisit onboarding/settings to change scope.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 8. Consent ledger\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Implement a real consent ledger. Consent is not text. Consent is state.\
+Each consent receipt should track: receipt ID, user/profile ID, source or workstream ID, scope, allowed processing modes, selected audience contexts, retention preference, approved boolean, approval timestamp, revoked boolean, revoked timestamp, revocation reason if available, deletion requested boolean, and version.\
+The inference pipeline must check consent before loading sources. Approved sources can be processed. Revoked/unapproved sources must be skipped. If a source was used in an old report, the old report can remain as a historical snapshot only if retention policy allows; otherwise deletion should remove or redact it. Build the simplest version now: revoked sources are excluded from future audits and marked in source ledger. Prepare deletion hooks for deeper cleanup.\
+The UI must include a sources and consent screen showing scanned workstreams, file counts, exposure counts, last scan time, consent state, processing state, and whether each source was included in last audit. The user must be able to approve/revoke per source or workstream.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 9. Source system\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 The current filesystem scan and workstream clusters are first-class sources. Map existing ctxorg objects into V1 objects:\
+FilesystemRoot becomes SourceProvider or SourceGroup.\
+Workstream becomes SourceGroup/Workstream node.\
+File becomes Artifact.\
+File path, extension, modified time, size, inferred domain, and cluster membership become artifact metadata.\
+Existing narratives become NarrativeArtifact or WorkstreamSummary, but they are not evidence by themselves unless linked to underlying files.\
+Existing exposures become RiskSignal or Exposure node.\
+Topology nodes become graph seed nodes.\
+Iris chat history, if relevant, can become optional internal context only with consent. Do not automatically include private chat logs as evidence unless the user approves that source.\
+Add source provider interfaces for future connectors: LocalFilesystemProvider, ManualURLProvider, GitHubProvider, BrowserHistoryProvider, ResumeUploadProvider, GoogleTakeoutProvider, GmailExportProvider, CalendarICSProvider, PublicSearchProvider, ScreenshotProvider, WebsiteSnapshotProvider, SocialArchiveProvider. V1.0 only needs local filesystem/workstreams working, but the interfaces should be clean.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 10. Scrapers and external collection\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Implement scrapers responsibly and locally where possible. Do not build stealth scraping, CAPTCHA bypass, account takeover, credential stuffing, hidden browser automation, or terms-violating mass collection. Optic is a self-audit tool. Scrapers must be user-triggered, scope-limited, rate-limited, logged, and attributable to the user\'92s own authorized inquiry.\
+Scraper categories:\
+Manual URL scraper: user enters a URL, app fetches page HTML, extracts title, text, metadata, links, canonical URL, screenshot if local browser tooling exists, and stores it as an artifact.\
+Website snapshot scraper: user enters their own domain or profile site, app crawls within domain up to a configured depth/page limit. Respect robots where applicable. Store snapshots and extracted text.\
+Search result scraper/provider: use an API adapter for Brave Search, SerpAPI, Google Programmable Search, Tavily, or another search API. If no key is available, build the provider interface and disabled UI. Do not scrape Google HTML directly as the main path.\
+GitHub provider: public GitHub API can work unauthenticated at low rate, but add optional GitHub token support. Pull repos, README files, pinned repos if available, commits metadata, languages, stars, forks, issues/PR summary if reasonable. For private repos, require token and explicit consent.\
+LinkedIn: do not build a stealth scraper. Use user-uploaded LinkedIn export, manual profile URL snapshot if publicly accessible, or future official/OAuth route if available. If no compliant access, show import instructions.\
+X/Twitter: prefer user-uploaded archive. If API key exists, implement adapter. Do not rely on brittle unauthorized scraping.\
+Reddit: public API or user export where feasible.\
+Browser history: local upload/import only. Do not read browser profiles silently. User must select/export/approve.\
+Google Takeout: user uploads archive/folder. Parse locally.\
+Gmail: V1.0 should prefer MBOX/export import. Live Gmail requires OAuth credentials and must notify user only for Google client ID/secret and configured redirect URI.\
+Calendar: ICS upload first. Google Calendar OAuth later.\
+Reverse image search: adapter only unless API key is provided. Do not build shady scraping. Notify for API key if this feature is requested/enabled.\
+Data broker discovery: only self-audit, API/provider adapter, disabled without key, with strong warnings. Do not build people-search abuse flows.\
+Required API keys to notify user for only when needed: GitHub token for higher rate/private repos; Google OAuth client ID/secret for Gmail/Drive/Calendar; Google Programmable Search API key and CX or SerpAPI key or Brave Search API key for search snapshots; Tavily API key if used for web extraction/search; X API key if official X integration is attempted; Reddit API credentials if official Reddit integration is attempted; AWS credentials only when preparing actual cloud deployment, not for local build; S3/R2 credentials only if external artifact storage is enabled; Stripe keys only for billing; email provider key only if transactional emails are built.\
+Again: if the key is missing, build adapter + disabled state + clear notification. Do not stop local app completion.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 11. Audit pipeline\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Implement the full audit pipeline as staged operations. The stages must be visible in UI and persistent in backend state.\
+Stage 1: Load audit config: user/profile, selected sources, selected workstreams, selected audience lenses, inference depth, model settings.\
+Stage 2: Consent filter: exclude unapproved/revoked sources.\
+Stage 3: Artifact selection: load artifacts from selected workstreams/sources; apply file type filters and limits if needed.\
+Stage 4: Evidence extraction: create parsed spans from file metadata, summaries, text snippets, path semantics, workstream summaries, exposure records, and existing scan outputs. If raw file content is unavailable or too expensive to parse, use available metadata but label evidence quality accordingly.\
+Stage 5: Signal extraction: infer low-level signals only from evidence. Examples: project density, topic clusters, stale files, exposed secrets patterns if exposure scanner exists, public/private mismatch, workstream fragmentation, high-volume unfinished work, repeated domains, technical stack evidence, identity labels, timeline gaps.\
+Stage 6: Audience application: apply selected V1 audience lens configs to signals and evidence.\
+Stage 7: Inference card generation: use the existing V1 evidence-gated generator. Reject unevidenced cards. Store cards.\
+Stage 8: Contradiction detection: run all 5 contradiction types from V1 package against artifacts/signals/cards/workstreams. Store contradictions.\
+Stage 9: Risk/exposure mapping: map existing exposures plus new risks into RiskFlag objects.\
+Stage 10: Repair generation: create concrete repair actions from cards, contradictions, and risks. Store repair queue.\
+Stage 11: Report assembly: create persisted report snapshot with scope, source ledger, cards, contradictions, risks, repairs, graph summary, and exports.\
+Stage 12: Graph projection: update topology/evidence graph with V1 nodes/edges or generate a graph view for the report.\
+Stage 13: Iris context indexing: make audit outputs queryable by Iris chat.\
+Stage 14: Completion: set audit state to completed or failed with stage-specific error.\
+The UI must show these states. A failed stage must not look like success. A partial run can persist partial outputs, but it must be clearly labeled.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 12. Inference depth modes\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Implement at least the interface for inference depth modes. If all modes share implementation initially, structure them cleanly.\
+Quick mode: fewer artifacts per workstream, metadata-heavy, fewer cards, lower LLM usage, fast scan.\
+Standard mode: balanced artifact selection, all selected audience lenses, contradictions, risks, repairs, report.\
+Deep mode: larger artifact sample, more cross-workstream linking, stronger contradiction pass, more repair actions, more Iris context indexing, optional local LLM summarization per workstream.\
+If Deep mode is expensive, make it work locally with caps and progress. Do not pretend Deep mode exists if it simply routes to the same shallow endpoint without indicating limits.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 13. Audience lenses\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Use the 9 audience lenses from the V1 package as canonical configs. The frontend must fetch them from the backend/package. Do not duplicate config by hand in the UI.\
+Each audience lens must influence inference. It is not a label. It should affect relevance weights, evidence preferences, false positive warnings, severity, and repair style. Example: recruiter lens values role clarity, timeline coherence, proof of competence, professionalism, and low ambiguity. Investor lens values execution velocity, insight, market obsession, technical leverage, coherence under chaos, and trust repair. Creator lens values public narrative, controversy surface, audience legibility, distinctiveness, and platform risk. Privacy lens values exposure, location leakage, sensitive traces, hidden metadata, account linkage, and removability.\
+The UI should show selected lens chips, lens descriptions, and lens-specific output. Cards should display which lens produced or prioritized them.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 14. Contradiction engine\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Wire all 5 contradiction detection types into the audit pipeline. A contradiction must include: contradiction ID, type, title, description, involved artifact IDs, involved span IDs if available, involved claims/signals if available, severity, confidence, affected audience lenses, suggested repair, created timestamp, and status.\
+Contradiction statuses: active, ignored, resolved, needs review.\
+Expose contradictions in three places: dedicated contradiction screen, report section, and linked inside inference cards/repair actions. Empty state must say checks completed and zero contradictions found. Do not silently hide contradictions because they are inconvenient.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 15. Risk and exposure engine\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 The existing ctxorg exposures must become first-class V1 risks. Map exposure outputs to RiskFlag objects. Also generate new risk flags from inference and contradictions.\
+Risk categories should include: stale context, identity mismatch, timeline gap, professional incoherence, overexposure, sensitive leakage, location leakage, financial signal leakage, health/mental-state inference risk, political/religious inference risk, controversy surface, association risk, search result contamination, impersonation/confusion risk, dead profile risk, unclaimed profile risk, platform bucket risk, audience mismatch, tone mismatch, missing proof, old username risk, public metadata risk, credential ambiguity, narrative fragmentation, machine-summary distortion, secret/token exposure, local file path leakage, private project leakage, r\'e9sum\'e9/profile mismatch, abandoned repo risk, and excessive unfinished-work signal.\
+Each risk must include severity, confidence, affected sources, affected audience lenses, evidence references, and repair relationship.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 16. Repair engine\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Build a real repair engine. It must produce actions from claims, contradictions, and risks. It cannot simply say \'93improve your profile.\'94 Every repair action must be executable.\
+Repair action fields: ID, audit run ID, title, summary, exact action, linked cards, linked contradictions, linked risks, source references, audience lenses affected, priority, effort, expected impact, reversibility, urgency, status, created timestamp, updated timestamp.\
+Statuses: proposed, accepted, in progress, ignored, completed.\
+Priority formula should approximate:\
+Priority = impact \'d7 confidence \'d7 audience importance \'d7 urgency \'d7 reversibility \'f7 effort\
+The repair queue UI must allow filtering by priority, effort, audience lens, source/workstream, risk type, status, and quick wins. It must support status changes and persist them.\
+Repair examples for filesystem/workstream-native Optic: consolidate fragmented project folders, add README to project, remove exposed secret file, rename confusing folder, archive dead prototype, create public summary of serious workstream, separate joke/chaos files from professional portfolio, update r\'e9sum\'e9 evidence, add canonical project page, document execution history, remove stale screenshots, mark private folders as excluded from future audits, create \'93proof pack\'94 for investor lens, create \'93role clarity pack\'94 for recruiter lens, or ignore because the weirdness is strategic under founder lens.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 17. Report engine\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Build persisted reports as snapshots. A report is not a generated text blob. It is a structured object with sections.\
+Required report sections: scope and consent, selected audience lenses, source/workstream ledger, audit summary, top inference cards, confidence distribution, contradiction summary, risks/exposures, repair queue, graph/topology summary, model/settings summary, export metadata.\
+Report must be viewable after reload. It must link to cards, contradictions, risks, repairs, and sources. It must have evidence drawers. It must export at least JSON and Markdown. PDF/HTML export is optional but useful if already easy.\
+Markdown export must be readable and include: title, generated time, scope, selected audiences, source ledger summary, findings by audience, contradictions, risks, repairs, and caveats. JSON export must preserve structured IDs and relationships.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 18. Graph and topology\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Preserve the existing topology graph. Extend it into V1 graph projection.\
+Graph modes should be prepared:\
+Workstream topology: existing clusters and file relationships.\
+Evidence graph: sources \uc0\u8594  artifacts \u8594  parsed spans \u8594  signals \u8594  claims.\
+Audience graph: audience lenses \uc0\u8594  prioritized claims \u8594  risks/repairs.\
+Contradiction graph: conflicting claims/signals/sources.\
+Repair graph: repair actions \uc0\u8594  affected risks/cards/sources.\
+If full graph modes are too much for V1.0, implement at least a V1 overlay that connects workstreams to cards, contradictions, risks, and repairs. Do not leave topology disconnected from V1 outputs.\
+Avoid random hairball graph. Add filters: source/workstream, audience lens, node type, confidence, severity, repair status. Clicking a graph node should open the corresponding detail panel where possible.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 19. Iris chat integration\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Iris must become audit-aware. Keep the existing Ollama-powered Iris chat, but wire it to structured audit context.\
+Iris should be able to answer: what did this audit find, which sources were used, what are the top risks, which contradictions matter, why did this inference card appear, what evidence supports it, what repairs should I do first, what changed since last audit if multiple reports exist, what did the recruiter lens see, what did the investor lens see, which workstream looks strongest, which workstream creates exposure, what is missing from the evidence.\
+Iris must cite structured object IDs or names when possible. It must not invent new claims outside the structured inference pipeline unless clearly labeled as conversational speculation. Better: if Iris identifies a possible new claim, it should suggest rerunning or adding it as a candidate, not silently mutate the report.\
+If Ollama is unavailable, Iris panel should show model unavailable and still allow browsing structured outputs.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 20. UI screens\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Required screens:\
+Onboarding.\
+Dashboard/Home.\
+Sources and Consent.\
+Workstreams.\
+Scan Status.\
+Audience Selection.\
+Run Audit / Audit Progress.\
+Inference Cards.\
+Card Detail with Evidence Drawer.\
+Contradictions.\
+Risks/Exposures.\
+Repair Queue.\
+Report View.\
+Report History.\
+Graph/Topology.\
+Iris Chat.\
+Settings.\
+Export Center.\
+Debug/Health screen if developer mode exists.\
+The dashboard must show: onboarding state, scan status, file count, workstream count, approved sources count, selected audiences, last audit time, inference card count, contradiction count, risk count, repair count, top risks, and primary CTA. CTA should be \'93Continue onboarding,\'94 \'93Approve sources,\'94 \'93Select audiences,\'94 \'93Run audit,\'94 or \'93View report,\'94 depending on state.\
+No dead buttons. No placeholder cards. No fake data unless demo mode is explicitly enabled and labeled. If a feature is disabled due to missing API key, show missing-key state. If disabled because not implemented, say not implemented in debug/admin only, but do not put broken controls in user path.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 21. Backend routes/capabilities\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Expose whatever routes fit the existing server style, but required capabilities must exist:\
+Health check.\
+Model status.\
+Get onboarding state.\
+Update onboarding step.\
+Create/update local profile.\
+List sources.\
+List workstreams.\
+Get source/workstream detail.\
+Approve/revoke source consent.\
+List audience lenses.\
+Update selected audience lenses.\
+Create audit run.\
+Get audit status/progress.\
+Cancel audit run if feasible.\
+List audit runs.\
+Get audit run detail.\
+List inference cards.\
+Get inference card detail.\
+List contradictions.\
+Update contradiction status.\
+List risks/exposures.\
+List repair actions.\
+Update repair action status.\
+Get graph data.\
+Get report.\
+List reports/history.\
+Export report JSON.\
+Export report Markdown.\
+Get settings.\
+Update settings.\
+Reset local data or clear V1 state, with warning.\
+If external connectors are built: list connector status, start connector import, get connector requirements/missing API keys.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 22. Local storage schema\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Use the existing storage if available. If adding local DB, represent these tables/collections:\
+profiles.\
+settings.\
+sources.\
+workstreams.\
+artifacts.\
+parsed_spans.\
+consent_receipts.\
+audience_lenses or selected_lenses.\
+audit_runs.\
+audit_events/progress.\
+signals.\
+inference_cards.\
+evidence_links.\
+contradictions.\
+risk_flags.\
+repair_actions.\
+reports.\
+exports.\
+graph_nodes.\
+graph_edges.\
+model_calls, optional.\
+chat_sessions/chat_messages, if Iris persistence exists.\
+Do not store huge raw file content in the DB unless already done. Store references, hashes, metadata, excerpts, summaries, and evidence spans.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 23. Evidence extraction from filesystem/workstreams\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Since the current system scans 115k files, do not attempt to fully read and LLM-process everything at once. Build selection and sampling.\
+Use artifact prioritization: include files from top workstreams, recently modified files, high-signal extensions, README/docs, source code metadata, package files, config files, notebooks, PDFs/text docs, markdown files, filenames/path semantics, existing summaries, and exposure-flagged files.\
+Skip or downrank: binaries, caches, node_modules, virtualenvs, build artifacts, large media, duplicate files, dependency folders, generated files, vendor folders, lockfiles except for stack detection, and enormous logs unless flagged by exposure scanner.\
+Evidence quality classes: direct text, direct metadata, inferred from path, inferred from workstream cluster, inferred from existing narrative, inferred from exposure scanner. Lower-quality evidence should reduce confidence.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 24. File and secret exposure scanning\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 If not already present, add basic local exposure scanning. Do not exfiltrate secrets. Detect and redact.\
+Patterns to detect: API keys, tokens, 
+\f2\fs26 .env
+\f0\fs24  files, private keys, SSH keys, AWS key-looking strings, GitHub token-looking strings, Google client secrets, Stripe keys, database URLs, local absolute paths, personal addresses/phone numbers if simple regex exists, credentials in config files, browser export sensitive fields.\
+Exposure output must become RiskFlag objects. UI must redact secret values by default. The user should see file/source reference and risk type, not raw secret pasted everywhere. This is spicy data; handle it like plutonium in a velvet bag.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 25. Model behavior\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Use Ollama/phi4-mini where available, but make the system robust without freeform LLM dependence. LLM calls should be structured and stage-specific.\
+Allowed LLM tasks: summarize workstream, extract candidate signals from evidence, explain why evidence supports a claim, generate readable repair language, answer Iris questions over structured context.\
+Not allowed: generate final cards without evidence, invent unsupported claims, infer protected/sensitive traits as identity facts, make eligibility judgments, rank the user as good/bad, or bypass consent scope.\
+Every LLM output used for persistence must be validated. If schema validation fails, retry or drop. If evidence references are invalid, reject. If output is too generic, mark low utility or avoid storing.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 26. Safety/refusal boundaries\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Build these boundaries into UI and backend:\
+No non-consensual auditing of other people.\
+No \'93find dirt on X.\'94\
+No \'93rank candidates.\'94\
+No \'93is this person mentally ill.\'94\
+No hidden account deanonymization.\
+No scraping private platforms without authorization.\
+No background-check export.\
+No employment/credit/tenant/insurance eligibility use.\
+No protected trait classification as a product feature.\
+No bulk people evaluation.\
+No raw private evidence export by default.\
+No silent inclusion of revoked sources.\
+If user enters a third-party URL, UI should ask whether this is their own profile/site or an authorized source. For V1.0 local build, this can be a consent checkbox. Future versions can add stronger checks.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 27. Settings\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Extend settings to include:\
+Local profile.\
+Model provider.\
+Ollama base URL.\
+Selected local model.\
+Model status.\
+Inference depth.\
+Data directory.\
+Artifact retention.\
+Consent defaults.\
+Source rescan behavior.\
+Excluded folders/patterns.\
+Secret redaction toggle.\
+External connector enablement.\
+Search provider status.\
+Export defaults.\
+Developer/debug mode.\
+Reset onboarding.\
+Clear audit history.\
+Delete local V1 state.\
+Settings must persist. Missing model/API keys must be visible here.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 28. API keys and credentials: notify only for these\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Only notify the user when one of these is required for a feature being actively enabled or tested:\
+GitHub token: needed for higher rate limits and private repo import.\
+Google OAuth client ID and client secret: needed for Gmail, Drive, Calendar live connectors.\
+Google Programmable Search API key and CX: needed for Google search result snapshots.\
+Brave Search API key: needed for Brave search provider.\
+SerpAPI key: needed if using SerpAPI instead of direct search provider.\
+Tavily API key: needed if using Tavily search/extraction.\
+X/Twitter API credentials: needed for official X import beyond user archive uploads.\
+Reddit API credentials: needed for official Reddit import if implemented.\
+AWS access key/secret or SSO profile, AWS region, S3 bucket, KMS key: only needed for cloud deployment/storage migration.\
+Cloudflare R2 credentials: only needed if R2 object storage is enabled.\
+Stripe secret/public keys and webhook secret: only needed if billing is implemented.\
+Email provider key: only needed if transactional emails are implemented.\
+Do not notify for things you can build locally. Do not ask what to do next every 10 minutes. Build until blocked by credential need or genuine ambiguity.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 29. Build order\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 Follow this order. Do not start with cosmetic UI.\
+First, inspect repo structure and identify server entrypoint, frontend entrypoint, current routes, storage, ctxorg scan data format, V1 package exports, audience lens configs, contradiction engine API, inference card generator API, Iris chat integration, topology graph data format, and settings persistence.\
+Second, create or extend persistence for V1 objects. Make sure state survives reload.\
+Third, create local profile/session abstraction.\
+Fourth, build onboarding state machine and screens.\
+Fifth, map ctxorg scan/workstreams/files/exposures into V1 source/artifact/workstream/risk objects.\
+Sixth, build consent ledger and enforce it in pipeline.\
+Seventh, expose audience lenses from V1 package through backend and UI.\
+Eighth, implement audit run orchestration and progress tracking.\
+Ninth, wire evidence extraction and signal preparation.\
+Tenth, wire inference card generator with evidence gate.\
+Eleventh, wire contradiction engine.\
+Twelfth, build risk/exposure mapping.\
+Thirteenth, build repair engine.\
+Fourteenth, build report snapshot creation and persistence.\
+Fifteenth, build report UI and exports.\
+Sixteenth, wire graph/topology overlays.\
+Seventeenth, make Iris audit-aware.\
+Eighteenth, extend settings/model status.\
+Nineteenth, add local scraper/provider interfaces and at least manual URL provider if feasible.\
+Twentieth, run full verification and fix breakage.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 30. Verification checklist\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 You must run the app and verify the whole thing.\
+Fresh state: app opens, onboarding appears.\
+Profile: local user/profile created.\
+Consent: sources/workstreams visible, approval state persists.\
+Audiences: 9 V1 lenses load from package.\
+Model: Ollama status visible.\
+Audit: selected approved sources and selected audiences create audit run.\
+Progress: UI shows staged progress.\
+Cards: inference cards generate with evidence.\
+Evidence: each card has evidence drawer or references.\
+Contradictions: engine runs all 5 types; output or checked-empty state appears.\
+Risks: existing exposures map into RiskFlag objects.\
+Repairs: repair queue generates and persists.\
+Report: report snapshot creates and can be reopened.\
+Export: JSON and Markdown export work.\
+Reload: refresh browser, state remains.\
+Graph: topology still works and V1 objects appear or are linked.\
+Iris: chat can answer questions about current audit context.\
+Settings: model and data settings persist.\
+Failure states: no approved sources, no selected audiences, Ollama unavailable, and audit failure are handled without hanging.\
+Build/test: run available tests, build commands, lint if available. Add smoke tests if missing.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f1\b\fs36 \cf0 31. Completion report\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b0\fs24 \cf0 At the end, produce a concise implementation report with:\
+What was already present.\
+What was added.\
+What files/modules changed.\
+How V1 package is wired.\
+How to run locally.\
+How to complete onboarding.\
+How to run an audit.\
+What endpoints/routes exist.\
+What persistence backend is used.\
+What tests/builds were run.\
+What passed.\
+What failed, if anything.\
+What requires API keys.\
+What remains incomplete, if genuinely incomplete.\
+Do not claim \'93complete\'94 unless onboarding, consent, sources, audiences, audit, inference cards, contradictions, risks, repairs, report, graph, settings, persistence, Iris context, and export actually work together. The standard is not \'93the server starts.\'94 The standard is 
+\f1\b the user can complete Optic V1.0 locally from first launch to exported report
+\f0\b0 .\
+Build it like a paranoid cathedral with a garage door: mathematically structured, locally useful, AWS-ready, and impossible to confuse with a fake demo.\
+}

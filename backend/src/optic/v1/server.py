@@ -505,6 +505,19 @@ def _mock_home_payload() -> dict:
     confidence_vals = [ws.get("confidence", 0) for ws in workstreams if ws.get("confidence")]
     coherence_avg = round(sum(confidence_vals) / len(confidence_vals), 2) if confidence_vals else 0.78
     
+    # Build a rich personality summary from the data
+    dominant_topic = "code" if any("code" in (ws.get("topics") or []) for ws in workstreams[:3]) else "content"
+    largest_ws = workstreams[0] if workstreams else {}
+    topic_str = ", ".join(largest_ws.get("topics", ["various"])[:2])
+    size_words = "substantial" if file_count > 3000 else "moderate" if file_count > 1000 else "focused"
+    iris_summary = (
+        f"You maintain a {size_words} digital footprint of {file_count} files "
+        f"across {len(workstreams)} workstreams. Your strongest signal is a "
+        f"{dominant_topic}-heavy workspace of {largest_ws.get('file_count', 0)} files "
+        f"covering {topic_str}. "
+        f"{claims_cnt} inference claims, {repairs_cnt} repairs suggested."
+    )
+    
     return {
         "home": str(Path.home()),
         "file_count": file_count,
@@ -516,7 +529,7 @@ def _mock_home_payload() -> dict:
         "last_analyzed_ago": "just now",
         "narratives": narratives or ["AI builder", "Independent researcher", "Privacy conscious", "Systems thinker"],
         "exposures": len(workstreams),
-        "iris_summary": f"{claims_cnt} inference claims across {len(workstreams)} workstreams. {repairs_cnt} repairs available, {risks_cnt} risks detected.",
+        "iris_summary": iris_summary,
     }
 
 
@@ -570,6 +583,8 @@ async def legacy_analyze(kind: str = "largest", limit: int = 10):
     ]
     lim = max(1, min(int(limit or 10), 50))
     if kind == "duplicates":
+        if not files:
+            return {"kind": kind, "groups": []}
         groups = [{
             "hash": "mock-duplicate-research",
             "waste": 18_420,
@@ -577,8 +592,8 @@ async def legacy_analyze(kind: str = "largest", limit: int = 10):
         }]
         return {"kind": kind, "groups": groups[:lim]}
     if kind == "old_downloads":
-        return {"kind": kind, "items": sorted(files, key=lambda f: f.get("mtime", 0))[:lim]}
-    return {"kind": kind, "items": sorted(files, key=lambda f: f.get("size", 0), reverse=True)[:lim]}
+        return {"kind": kind, "items": sorted(files, key=lambda f: f.get("mtime", 0))[:lim] if files else []}
+    return {"kind": kind, "items": sorted(files, key=lambda f: f.get("size", 0), reverse=True)[:lim] if files else []}
 
 @app.post("/api/v1/auth/signup")
 async def signup(req: SignupRequest):

@@ -23,6 +23,36 @@ from typing import Generator
 from . import cfg as cfgmod
 from . import db, ollama
 
+# Prompt injection guard — mirrors _CHAT_BLOCK_RE from server.py
+_IRIS_BLOCK_RE = re.compile(
+    r"(ignore (all )?(previous|prior) instructions|"
+    r"reveal (the )?(system|developer) prompt|"
+    r"print (the )?(system|developer) message)",
+    re.IGNORECASE,
+)
+
+# Despaced variant - catches spaced-letter and carriage-return obfuscation.
+_DESPACED_IRIS_BLOCK_RE = re.compile(
+    r"(ignore(all)?(previous|prior)instructions|"
+    r"reveal(the)?(system|developer)prompt|"
+    r"print(the)?(system|developer)message)",
+    re.IGNORECASE,
+)
+
+
+def _iris_guard_check(q: str) -> bool:
+    """Return True if *q* contains a blocked prompt-injection pattern.
+
+    Resilient to obfuscation: collapses all whitespace (handles \\r, \\n,
+    multi-space) and also checks the fully-despaced variant.
+    """
+    normalized = re.sub(r"\s+", " ", q).strip()
+    if _IRIS_BLOCK_RE.search(normalized):
+        return True
+    despaced = re.sub(r"\s+", "", q)
+    if _DESPACED_IRIS_BLOCK_RE.search(despaced):
+        return True
+    return False
 
 # ─── Neurontology System Prompt ──────────────────────────────────────────────
 
@@ -962,15 +992,19 @@ def stream_response(cfg: dict, conn,
       {"type":"error",      "message":"..."}
     """
     mode = str(body.get("mode", "report"))
-    q = str(body.get("q", "")).strip()[:2400]
+    q = str(body.get("q", "")).replace("\x00", "").strip()[:2400]
     run = str(body.get("run", "")).strip()
     history = _history_pack(list(body.get("history", [])))
     # Identity-mode extras
     selected_ids: list[str] = [str(i) for i in body.get("selected_ids", []) if i]
     audience_id: str = str(body.get("audience", "recruiter"))
 
+    # Prompt injection guard — mirror _chat_guard_input from server.py
     if not q:
         yield _chunk("error", message="Empty query") + "\n"
+        return
+    if _iris_guard_check(q):
+        yield _chunk("error", message="Input blocked — disallowed pattern detected") + "\n"
         return
 
     # Larger context window for modes that produce long structured output
@@ -1015,7 +1049,13 @@ def stream_response(cfg: dict, conn,
     messages: list = [{"role": "system", "content": system_content}]
     for h in history[-10:]:
         if isinstance(h, dict) and h.get("role") and h.get("content"):
-            messages.append({"role": h["role"], "content": str(h["content"])[:2000]})
+            role = str(h["role"]).strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            content = str(h["content"]).replace("\x00", "").strip()
+            if not content:
+                continue
+            messages.append({"role": role, "content": content[:2000]})
     messages.append({"role": "user", "content": q})
 
     # ── Step 3: Stream LLM response ───────────────────────────────────────

@@ -128,9 +128,31 @@ def _clean_name(raw: str) -> str:
             name = name[len(prefix):]
     name = name.replace("-", " ").replace("_", " ")
     words = name.split()
+    # Filter out noise words (URL fragments, generic terms, hex noise)
+    noise = {
+        "https", "http", "www", "com", "org", "net", "html", "json", "xml",
+        "css", "js", "php", "asp", "jsp", "htm", "xhtml",
+        "image", "images", "file", "files", "copy", "backup", "final", "draft",
+        "temp", "untitled", "screenshot", "screenshots", "screen",
+        "photo", "photos", "picture", "pictures", "img", "pic",
+        "version", "new", "old", "test", "sample", "example", "misc", "various",
+        "inbox", "downloads", "desktop", "documents", "library", "folder",
+        "users", "home", "root", "local", "mobile",
+        "name", "path", "size", "type", "date", "true", "false", "null", "none",
+        "default", "used", "found",
+        "abx", "xtcftw", "rspace", "pyasn1",
+        "data", "work", "beta", "tests", "examples", "docs", "generated",
+        "live", "round", "very", "simple", "just", "only", "some",
+    }
+    meaningful = [w for w in words if w.lower() not in noise]
+    if not meaningful:
+        # Every word was noise — return the raw name (trimmed)
+        return raw.strip()[:30] or "Other"
     cleaned = []
-    for w in words:
-        if w.upper() in ("AI", "API", "HTTPS", "SSL", "DNS", "PDF", "CSS", "JS", "ML"):
+    for w in meaningful:
+        if w.upper() in ("AI", "API", "SSL", "DNS", "PDF", "CSS", "JS", "ML",
+                         "UI", "UX", "NLP", "GPU", "CPU", "RAM", "SSD",
+                         "VM", "CI", "CD", "AWS", "GCP", "SQL", "NoSQL", "DB"):
             cleaned.append(w.upper())
         elif len(w) <= 2:
             cleaned.append(w.upper())
@@ -331,9 +353,9 @@ def _lens_relevant(lens: str, topics: list[str], fc: int, conf: float) -> bool:
     # Collaborator cares about code, writing, shared work
     if lens == "collaborator":
         return primary in ("code", "writing") and fc > 50
-    # Ad platform sees media, images, large data
+    # Ad platform sees media, images, large data repositories
     if lens == "ad_platform":
-        return primary in ("images", "data", "documents")
+        return primary in ("images", "data", "documents", "writing") or fc > 100
     # Future AI agent sees everything
     if lens == "future_agent":
         return True

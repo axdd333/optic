@@ -257,7 +257,7 @@ def detect_signals(item: dict, extracted: dict, role: str) -> list[dict]:
             "signal_type": "financial_profile",
             "description": "Signals financial status, transaction patterns, or income level",
             "confidence": 0.80,
-            "audience_visibility": ["lender", "investor", "adversarial"],
+            "audience_visibility": ["investor", "adversarial"],
         })
 
     if role == "code":
@@ -582,16 +582,6 @@ AUDIENCE_PROFILES: dict[str, dict] = {
         "default_questions": ["Is the argument rigorous?", "Are claims supported by evidence?"],
         "risk_sensitivity": "medium",
         "likely_false_positives": ["practical work misread as lacking academic rigour"],
-    },
-    "lender": {
-        "audience_id": "lender",
-        "name": "Bank / Lender",
-        "cares_about": ["income stability", "debt load", "spending patterns", "employment continuity"],
-        "penalizes": ["income volatility", "high existing debt", "irregular transaction patterns"],
-        "interpretation_style": "risk scoring against standardised credit models",
-        "default_questions": ["Can this person repay reliably?", "What is their financial risk profile?"],
-        "risk_sensitivity": "high",
-        "likely_false_positives": ["self-employment income misread as instability"],
     },
 }
 
