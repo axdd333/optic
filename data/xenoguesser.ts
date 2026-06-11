@@ -583,7 +583,9 @@ export function scoreWorld(world: Worldseed, picks: Picks): WorldScore {
   const missedTags = world.trueTags.filter((t) => !guess.has(t));
   const falseTags = [...guess].filter((t) => !truthSet.has(t));
   const raw =
-    (hitTags.length - FALSE_LEAD_WEIGHT * falseTags.length) / world.trueTags.length;
+    world.trueTags.length > 0
+      ? (hitTags.length - FALSE_LEAD_WEIGHT * falseTags.length) / world.trueTags.length
+      : 0;
   const frac = Math.max(0, Math.min(1, raw));
   return {
     hitTags,

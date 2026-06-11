@@ -3,7 +3,6 @@
 import { useMemo, useState } from 'react';
 import {
   AXES,
-  ROUNDS,
   TAG_LABELS,
   axisVerdict,
   emptyPicks,
@@ -80,8 +79,8 @@ export default function Xenoguesser() {
   }
 
   function nextRound() {
-    if (roundIdx + 1 >= ROUNDS) {
-      setRoundIdx(ROUNDS);
+    if (roundIdx + 1 >= run.length) {
+      setRoundIdx(run.length);
       return;
     }
     setRoundIdx((i) => i + 1);
@@ -162,7 +161,7 @@ export default function Xenoguesser() {
             Peer into hyperspace →
           </button>
           <p className="mt-4 font-sans text-xs text-[var(--color-muted)]">
-            {ROUNDS} worlds · 6 instruments · 9 axes · causal scoring · seed #{seed}
+            {run.length} worlds · 6 instruments · 9 axes · causal scoring · seed #{seed}
           </p>
         </div>
       </Shell>
@@ -170,8 +169,8 @@ export default function Xenoguesser() {
   }
 
   // ---- Report card -----------------------------------------------------
-  if (roundIdx >= ROUNDS) {
-    const maxTotal = ROUNDS * 1000;
+  if (roundIdx >= run.length) {
+    const maxTotal = run.length * 1000;
     return (
       <Shell>
         <div className="mx-auto max-w-2xl py-16">
@@ -183,7 +182,7 @@ export default function Xenoguesser() {
             {runTotal.toLocaleString()}{' '}
             <span className="text-[var(--color-muted)]">/ {maxTotal.toLocaleString()}</span>
             <span className="ml-3 text-[var(--color-muted)]">
-              ({Math.round((runTotal / maxTotal) * 100)}% seed recovery)
+              ({maxTotal > 0 ? Math.round((runTotal / maxTotal) * 100) : 0}% seed recovery)
             </span>
           </p>
 
@@ -233,7 +232,7 @@ export default function Xenoguesser() {
     <Shell>
       <div className="flex items-center justify-between border-b border-[var(--color-border)] py-4">
         <span className="font-sans text-xs uppercase tracking-[0.2em] text-[var(--color-muted)]">
-          World {roundIdx + 1} / {ROUNDS} · {DIFFICULTY[difficulty].label}
+          World {roundIdx + 1} / {run.length} · {DIFFICULTY[difficulty].label}
         </span>
         <span className="font-sans text-sm">
           Run total: <span className="font-medium">{runTotal.toLocaleString()}</span>
@@ -417,7 +416,7 @@ export default function Xenoguesser() {
                 onClick={nextRound}
                 className="rounded-full bg-[var(--color-ink)] px-8 py-3 font-sans text-base font-medium text-[var(--color-cream)] transition hover:opacity-90"
               >
-                {roundIdx + 1 >= ROUNDS ? 'See session report →' : 'Next world →'}
+                {roundIdx + 1 >= run.length ? 'See session report →' : 'Next world →'}
               </button>
             </div>
             <p className="mt-3 font-editorial text-[15px] italic leading-relaxed text-[var(--color-ink)]">
