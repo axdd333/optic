@@ -32,7 +32,7 @@ export default function SignupPage() {
       if (!res.ok) {
         setError(data.error || 'Something went wrong.');
       } else {
-        router.push('/app');
+        router.push('/onboarding');
       }
     } catch {
       setError('Could not reach the server. Try again.');

@@ -112,21 +112,21 @@ try:
     rows = list(reader)
     assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
     assert reader.fieldnames == ["id", "name", "file_count", "confidence", "topics", "summary"]
-    
+
     # Verify data
     r1 = rows[0]
     assert r1['file_count'] == '423'
     assert r1['confidence'] == '0.92'
     assert ';' in r1['topics'], f"Topics should be semicolon-delimited: {r1['topics']}"
-    
+
     # Verify empty case
     ext_e, body_e = _export_to_csv({})
     assert "id,name,file_count" in body_e.decode('utf-8'), "Empty CSV must have header"
-    
+
     # Verify direct list
     ext_l, body_l = _export_to_csv(workstreams_data["workstreams"])
     assert len(list(csv.DictReader(io.StringIO(body_l.decode('utf-8'))))) == 3
-    
+
     print(f"  OK: CSV works - 3 rows, semicolon topics, empty header, direct list")
 except Exception as e:
     errors.append(f"CSV: {e}")
@@ -153,7 +153,7 @@ except Exception as e:
 try:
     # Build PDF data matching what _export_build returns for 'report' kind
     pdf_data = report_data  # report_payload already has corpus + scan at top level
-    
+
     # But _export_to_pdf also extracts workstreams from data
     # Let's add workstreams to simulate the combined _export_build output
     pdf_data_with_ws = {
@@ -161,7 +161,7 @@ try:
         "workstreams": workstreams_data,
         "report": report_data,
     }
-    
+
     ext, body = _export_to_pdf(pdf_data_with_ws, "run-abc", 1716000000)
     assert ext == ".pdf"
     assert body[:5] == b'%PDF-', f"Not a valid PDF: {body[:10]}"
@@ -221,7 +221,7 @@ try:
     ext, body = _export_to_md(md_data, "run-abc", 1716000000)
     assert ext == ".md"
     md_text = body.decode('utf-8')
-    
+
     checks = [
         ("Title (H1)", "# Optic Export Report" in md_text),
         ("Run info", "**Run:** run-abc" in md_text),
@@ -242,21 +242,21 @@ try:
         if not result:
             all_md_ok = False
             errors.append(f"Markdown: {label}")
-    
+
     if all_md_ok:
         print("  OK: All markdown sections present")
-    
+
     # Verify MD content quality
     assert "Optic self-audit" in md_text
     print(f"  OK: MD has footer watermark")
-    
+
     # Empty case
     ext_e, body_e = _export_to_md({}, "run-empty", 1716000000)
     md_empty = body_e.decode('utf-8')
     assert "# Optic" in md_empty
     assert "Not a consumer report" in md_empty
     print(f"  OK: Empty MD has title + disclaimer")
-    
+
 except Exception as e:
     errors.append(f"Markdown: {e}")
     print(f"  ERROR: {e}")
@@ -278,14 +278,14 @@ assert r2['emails'] == 2
 print(f"  OK: Detects emails (count={r2['emails']})")
 
 # Tokens (sk- prefix)
-r3 = _export_check({"token": "sk-abc123def456ghijklmnop"})
+r3 = _export_check({"token": "sk-abc123def456ghijklmnop"})  # gitleaks:allow -- detector test fixture
 assert r3['tokens'] >= 1
 print(f"  OK: Detects API tokens (count={r3['tokens']})")
 
 # Redaction
 data = {
     "user": "john@example.com",
-    "notes": "API key: sk-abc123def456",
+    "notes": "API key: sk-abc123def456",  # gitleaks:allow -- redaction test fixture
     "items": [{"contact": "jane@test.org"}, {"phone": "555-123-4567"}]
 }
 redacted = _export_redact(data)

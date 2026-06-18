@@ -4,6 +4,7 @@ out/
 coverage/
 .DS_Store
 *.log
+*.tsbuildinfo
 tmp-*.png
 .env*.local
 

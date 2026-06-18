@@ -17,6 +17,7 @@ const ALLOWED_PREFIXES: string[] = [
   '/api/audience', '/api/audit', '/api/chat', '/api/iris',
   '/api/rename', '/api/signup', '/api/signin', '/api/signout',
   '/api/scan', '/api/embed/run',
+  '/api/vana/',
   '/api/v1/',
   '/healthz', '/readyz', '/api/health', '/api/ready',
   '/static/',

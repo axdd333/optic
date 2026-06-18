@@ -919,7 +919,8 @@ class WorkstreamsMode {
 
   renderLoading() {
     // Build skeleton cards matching the grid layout
-    const skeletonCard = (i) => `<div class="skeleton-card skeleton-pulse skeleton-shimmer" style="animation-delay:${i * 80}ms">`
+    const skeletonCard = (i) => `<div class="skeleton-card skeleton-pulse skeleton-shimmer" style="animation-delay:${i * 80}ms">
+      <div class="skeleton-card-inner">
       <div class="skeleton-card-header">
         <div class="skeleton-icon"></div>
         <div class="skeleton-title-group">
@@ -950,6 +951,7 @@ class WorkstreamsMode {
         <div class="skeleton-btn primary"></div>
         <div class="skeleton-btn ghost"></div>
         <div class="skeleton-btn ghost"></div>
+      </div>
       </div>
     </div>`;
     this.container.innerHTML = `<section class="home-header">

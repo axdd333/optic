@@ -1849,11 +1849,22 @@ body::after {
 .ws-sort {
   height: 30px;
   padding: 0 28px 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: 999px;
   color: var(--muted);
-  background: rgba(255,255,255,.72);
+  background: var(--glass-fill);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: var(--glass-shadow);
   outline: 0;
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+}
+.ws-sort:hover {
+  border-color: rgba(var(--accent-rgb),.18);
+}
+.ws-sort:focus {
+  border-color: rgba(var(--accent-rgb),.36);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb),.08);
 }
 
 .ws-view {
@@ -1865,16 +1876,20 @@ body::after {
 .ws-view-btn {
   width: 30px;
   height: 30px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: 9px;
   color: var(--muted);
-  background: rgba(255,255,255,.72);
-  transition: border-color .12s, color .12s, background .12s, transform .12s;
+  background: var(--glass-fill);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: var(--glass-shadow);
+  transition: border-color .12s, color .12s, background .12s, transform .12s, box-shadow .12s;
 }
 .ws-view-btn:hover {
-  border-color: var(--line-hi);
+  border-color: rgba(var(--accent-rgb),.22);
   color: var(--text);
   transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0,0,0,.04);
 }
 .ws-view-btn:active {
   transform: translateY(0) scale(0.93);
@@ -1889,21 +1904,29 @@ body::after {
 .cluster-tab {
   height: 30px;
   padding: 0 14px;
-  border: 1px solid rgba(0,0,0,.09);
+  border: 1px solid var(--glass-border);
   border-radius: 999px;
-  background: rgba(255,255,255,.6);
+  background: var(--glass-fill);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: all .15s var(--ease);
+  transition: all .18s var(--ease);
   flex-shrink: 0;
+  box-shadow: var(--glass-shadow);
 }
-.cluster-tab:hover { border-color: var(--line-hi); color: var(--text); transform: translateY(-1px); }
+.cluster-tab:hover {
+  border-color: rgba(var(--accent-rgb),.18);
+  color: var(--text);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,.05);
+}
 .cluster-tab:active {
   transform: translateY(0) scale(0.96);
-  transition: transform .08s var(--ease);
+  transition: transform .1s var(--ease);
 }
 .cluster-tab.active {
   background: var(--accent);
@@ -1994,16 +2017,16 @@ body::after {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 2;
+  z-index: 3;
   background: linear-gradient(
     105deg,
-    transparent 30%,
-    rgba(255,255,255,0.28) 44%,
-    rgba(255,255,255,0.42) 47%,
-    rgba(255,255,255,0.28) 50%,
-    transparent 64%
+    transparent 28%,
+    rgba(255,255,255,0.24) 44%,
+    rgba(255,255,255,0.40) 47%,
+    rgba(255,255,255,0.24) 50%,
+    transparent 66%
   );
-  animation: skeletonShimmer 2.2s cubic-bezier(.45,0,.25,1) infinite;
+  animation: skeletonShimmer 2.4s cubic-bezier(.45,0,.25,1) infinite;
 }
 /* Minimal skeleton block — used in rail skeletons and other compact contexts */
 .skeleton-block {
@@ -2012,19 +2035,20 @@ body::after {
   border: 1px solid rgba(0,0,0,.03);
 }
 
-/* Card-shaped skeleton — mimics .ws-card2 structure */
+/* Card-shaped skeleton — mimics .ws-card2 structure, frost-glass shimmer */
 .skeleton-card {
   background: var(--glass-fill);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-lg);
-  padding: 20px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  overflow: hidden;
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: var(--glass-shadow);
   min-height: 200px;
+  position: relative;
 }
 .skeleton-card::before {
   content: '';
@@ -2033,6 +2057,16 @@ body::after {
   border-radius: inherit;
   background: var(--glass-shine);
   pointer-events: none;
+  z-index: 1;
+  opacity: 0.5;
+}
+.skeleton-card-inner {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;
+  z-index: 2;
 }
 .skeleton-card-header {
   display: flex;
@@ -2043,8 +2077,8 @@ body::after {
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  background: rgba(0,0,0,.06);
-  border: 1px solid rgba(0,0,0,.05);
+  background: rgba(0,0,0,.055);
+  border: 1px solid rgba(0,0,0,.04);
   flex-shrink: 0;
 }
 .skeleton-title-group {
@@ -2057,7 +2091,8 @@ body::after {
 .skeleton-line {
   height: 13px;
   border-radius: 4px;
-  background: rgba(0,0,0,.055);
+  background: rgba(0,0,0,.05);
+  border: 1px solid rgba(0,0,0,.025);
 }
 .skeleton-line.wide { width: 70%; }
 .skeleton-line.medium { width: 50%; }
@@ -2072,11 +2107,11 @@ body::after {
 .skeleton-body .skeleton-line.short { width: 75%; }
 .skeleton-body .skeleton-line.medium { width: 55%; }
 
-/* Skeleton evidence block */
+/* Skeleton evidence block — frost-glass match */
 .skeleton-evidence {
   border: 1px solid rgba(0,0,0,.04);
   border-radius: var(--r-md);
-  background: rgba(0,0,0,.012);
+  background: rgba(var(--accent-rgb),.015);
   padding: 10px 13px;
   display: flex;
   flex-direction: column;
@@ -2092,32 +2127,33 @@ body::after {
   width: 12px;
   height: 12px;
   border-radius: 3px;
-  background: rgba(0,0,0,.05);
+  background: rgba(0,0,0,.04);
+  border: 1px solid rgba(0,0,0,.025);
   flex-shrink: 0;
 }
 
-/* Skeleton action bar */
+/* Skeleton action bar — matches .ws-actions2 */
 .skeleton-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   padding-top: 12px;
   margin-top: auto;
-  border-top: 1px solid rgba(0,0,0,.03);
+  border-top: 1px solid rgba(0,0,0,.025);
 }
 .skeleton-btn {
   height: 28px;
   border-radius: 7px;
-  background: rgba(0,0,0,.045);
-  border: 1px solid rgba(0,0,0,.04);
+  background: rgba(0,0,0,.04);
+  border: 1px solid rgba(0,0,0,.03);
 }
 .skeleton-btn.primary { width: 110px; }
 .skeleton-btn.ghost { width: 64px; }
 .skeleton-actions .skeleton-btn.ghost:first-of-type { margin-left: auto; }
 
-/* Card entry animation (shared by workstream cards) — fade-in stagger */
+/* Card entry animation — refined stagger with subtle scale-up */
 @keyframes cardIn {
-  from { opacity:0; transform:translateY(12px) scale(0.97); }
+  from { opacity:0; transform:translateY(14px) scale(0.965); }
   to   { opacity:1; transform:translateY(0) scale(1); }
 }
 
@@ -2133,10 +2169,10 @@ body::after {
   box-shadow: var(--glass-shadow);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  transition: box-shadow .22s var(--ease), border-color .22s var(--ease),
-              transform .22s var(--ease), background .22s var(--ease);
-  animation: cardIn .28s var(--ease) both;
-  animation-delay: calc(var(--card-index, 0) * 55ms);
+  transition: box-shadow .28s var(--ease), border-color .28s var(--ease),
+              transform .28s var(--ease), background .28s var(--ease);
+  animation: cardIn .32s var(--ease) both;
+  animation-delay: calc(var(--card-index, 0) * 60ms);
   cursor: default;
   position: relative;
   will-change: transform, box-shadow;
@@ -2150,30 +2186,59 @@ body::after {
   background: var(--glass-shine);
   pointer-events: none;
   z-index: 0;
+  transition: opacity .28s var(--ease);
+}
+/* Accent glow ring — invisible until hover */
+.ws-card2::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: calc(var(--r-lg) + 2px);
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity .32s var(--ease);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(var(--accent-rgb),.10), transparent 60%),
+    radial-gradient(ellipse at 80% 100%, rgba(var(--accent-rgb),.04), transparent 55%);
+  filter: blur(4px);
 }
 .ws-card2:hover {
   box-shadow:
-    0 18px 40px rgba(15,33,76,.14),
-    0 4px 14px rgba(0,0,0,.07),
-    0 0 0 1px rgba(var(--accent-rgb),.08),
-    0 0 32px rgba(var(--accent-rgb),.04);
-  border-color: rgba(13,42,108,.24);
+    0 22px 48px rgba(15,33,76,.12),
+    0 6px 16px rgba(0,0,0,.06),
+    0 0 0 1px rgba(var(--accent-rgb),.10),
+    0 0 40px rgba(var(--accent-rgb),.05);
+  border-color: rgba(13,42,108,.28);
   transform: translateY(-3px);
   background: rgba(255,255,255,.98);
+}
+.ws-card2:hover::after {
+  opacity: 1;
+}
+.ws-card2:hover::before {
+  opacity: 0.85;
 }
 .ws-card2:focus-visible {
   outline: none;
   box-shadow:
-    0 18px 40px rgba(15,33,76,.14),
-    0 4px 14px rgba(0,0,0,.07),
-    0 0 0 2px rgba(var(--accent-rgb),.28),
-    0 0 32px rgba(var(--accent-rgb),.06);
-  border-color: rgba(var(--accent-rgb),.32);
+    0 22px 48px rgba(15,33,76,.12),
+    0 6px 16px rgba(0,0,0,.06),
+    0 0 0 2px rgba(var(--accent-rgb),.32),
+    0 0 40px rgba(var(--accent-rgb),.08);
+  border-color: rgba(var(--accent-rgb),.36);
   transform: translateY(-2px);
 }
+.ws-card2:focus-visible::after {
+  opacity: 1;
+}
 .ws-card2:active {
-  transform: translateY(-1px) scale(0.988);
-  transition: transform .08s var(--ease);
+  transform: translateY(-1px) scale(0.985);
+  transition: transform .1s var(--ease), box-shadow .1s var(--ease);
+  box-shadow:
+    0 6px 14px rgba(15,33,76,.08),
+    0 2px 4px rgba(0,0,0,.04),
+    0 0 0 1px rgba(var(--accent-rgb),.06);
 }
 
 /* Card header strip */
@@ -2335,10 +2400,43 @@ body::after {
   white-space: nowrap;
 }
 
-.ws-card2 .ws-evidence-row[data-extra="1"] { display: none; }
-.ws-card2.ws-expanded .ws-evidence-row[data-extra="1"] { display: flex; }
+/* Evidence rows — smooth expand/collapse via max-height + opacity */
+.ws-card2 .ws-evidence-row[data-extra="1"] {
+  display: flex;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    max-height .3s var(--ease),
+    opacity .22s var(--ease),
+    margin .3s var(--ease);
+  margin-top: 0;
+}
+.ws-card2.ws-expanded .ws-evidence-row[data-extra="1"] {
+  max-height: 36px;
+  opacity: 1;
+  margin-top: 0;
+}
 
-/* Action row — inline horizontal strip at bottom */
+/* Evidence row hover — subtle frost-glass highlight */
+.ws-evidence-row {
+  border-radius: 7px;
+  padding: 4px 8px;
+  margin: -2px -8px;
+  transition: background .15s var(--ease);
+  cursor: default;
+}
+.ws-evidence-row:hover {
+  background: rgba(var(--accent-rgb),.04);
+}
+.ws-evidence-row:hover .ws-ev-icon {
+  opacity: .7;
+}
+.ws-ev-icon {
+  transition: opacity .15s var(--ease);
+}
+
+/* Action row — inline horizontal strip at bottom, frost-glass */
 .ws-actions2 {
   display: flex;
   align-items: center;
@@ -2348,7 +2446,9 @@ body::after {
   border-top: 1px solid rgba(0,0,0,0.04);
   position: relative;
   z-index: 1;
-  background: rgba(255,255,255,.5);
+  background: rgba(255,255,255,0.62);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
 }
 
 .ws-action-primary {
@@ -2364,15 +2464,19 @@ body::after {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: -.1px;
-  transition: background .16s, border-color .16s, transform .12s;
+  transition: background .18s var(--ease), border-color .18s var(--ease),
+              transform .12s var(--ease), box-shadow .18s var(--ease);
+  white-space: nowrap;
 }
 .ws-action-primary:hover {
-  background: rgba(var(--accent-rgb),.11);
-  border-color: rgba(var(--accent-rgb),.36);
+  background: rgba(var(--accent-rgb),.12);
+  border-color: rgba(var(--accent-rgb),.40);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb),.10);
 }
 .ws-action-primary:active {
   transform: scale(0.96);
-  transition: transform .08s var(--ease);
+  transition: transform .1s var(--ease);
+  background: rgba(var(--accent-rgb),.08);
 }
 
 .ws-actions2-ghost {
@@ -2386,21 +2490,25 @@ body::after {
   height: 30px;
   padding: 0 10px;
   border-radius: 8px;
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
   color: rgba(0,0,0,0.36);
   font-size: 11.5px;
   font-weight: 500;
   letter-spacing: -.05px;
-  transition: background .12s, color .12s, transform .12s;
+  transition: background .15s var(--ease), color .15s var(--ease),
+              transform .12s var(--ease), border-color .15s var(--ease);
+  white-space: nowrap;
 }
 .ws-action-ghost:hover {
-  background: rgba(0,0,0,0.04);
+  background: rgba(0,0,0,0.03);
+  border-color: rgba(0,0,0,0.06);
   color: rgba(0,0,0,0.62);
 }
 .ws-action-ghost:active {
   transform: scale(0.96);
-  transition: transform .08s var(--ease);
+  transition: transform .1s var(--ease);
+  background: rgba(0,0,0,0.05);
 }
 
 /* ─── Onboarding ─────────────────────────────────────────────────────────── */
@@ -3762,6 +3870,17 @@ body::after {
   .route-card:hover,
   .rail-card:hover {
     transform: none !important;
+  }
+
+  .ws-card2::after,
+  .ws-card2:hover::after {
+    opacity: 0 !important;
+  }
+
+  .ws-card2 .ws-evidence-row[data-extra="1"] {
+    max-height: none !important;
+    opacity: 1 !important;
+    overflow: visible !important;
   }
 
   button:active,
@@ -5213,6 +5332,3 @@ body::after {
   /* Keep scroll behaviour smooth but instant */
   html { scroll-behavior: auto; }
 }
-
-
-

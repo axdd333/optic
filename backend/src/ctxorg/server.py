@@ -83,6 +83,12 @@ except ImportError:
     _OPTIC_AVAILABLE = False
     _ML_AVAILABLE = False
 
+try:
+    from optic import vana_ingest as _vana  # type: ignore
+    _VANA_AVAILABLE = True
+except ImportError:
+    _VANA_AVAILABLE = False
+
 # ── Optic V1 database (shared with optic.v1) ─────────────────────
 # Always use the real-user DB path.  Path.home() points to a Hermes
 # profile home in agent sessions, and the profile-local v1.db is
@@ -1142,6 +1148,10 @@ def route(req: BaseHTTPRequestHandler, cfg: dict) -> None:
         return send(req, v1_audit_general_payload(req, cfg))
     if path == "/api/v1/graph/evidence":
         return send(req, v1_graph_evidence_payload(req, cfg))
+    if path == "/api/vana/status":
+        return send(req, vana_status_payload(cfg))
+    if path == "/api/vana/profile":
+        return send(req, vana_profile_payload(req, cfg))
     if path.startswith("/api/"):
         return send_err(req, "not_found", code=404)
     return send_err(req, "not_found", code=404)
@@ -1264,13 +1274,17 @@ def post(req: BaseHTTPRequestHandler, cfg: dict) -> None:
         return send(req, v1_repair_complete_payload(req, cfg, rep_id))
     if path == "/api/v1/reset":
         return send(req, v1_reset_payload(cfg))
+    if path == "/api/vana/ingest":
+        return send(req, vana_ingest_payload(req, cfg))
+    if path == "/api/vana/upload":
+        return send(req, vana_upload_payload(req, cfg))
     if path.startswith("/api/"):
         return send_err(req, "not_found", code=404)
     return send_err(req, "not_found", code=404)
 
 
-def body(req: BaseHTTPRequestHandler) -> dict:
-    raw = body_raw(req)
+def body(req: BaseHTTPRequestHandler, max_body: int | None = None) -> dict:
+    raw = body_raw(req, max_body=max_body)
     if not raw:
         return {}
     txt = decode_body(raw)
@@ -1388,8 +1402,8 @@ def _chat_guard_output(data: object) -> dict:
     return out
 
 
-def body_raw(req: BaseHTTPRequestHandler) -> bytes:
-    size = read_size(req)
+def body_raw(req: BaseHTTPRequestHandler, max_body: int | None = None) -> bytes:
+    size = read_size(req, max_body=max_body)
     if size == 0:
         return b""
     try:
@@ -1402,7 +1416,8 @@ def body_raw(req: BaseHTTPRequestHandler) -> bytes:
     return raw
 
 
-def read_size(req: BaseHTTPRequestHandler) -> int:
+def read_size(req: BaseHTTPRequestHandler, max_body: int | None = None) -> int:
+    limit = max_body if max_body is not None else _MAX_BODY
     raw = req.headers.get("content-length", "0") or "0"
     try:
         size = int(raw)
@@ -1410,10 +1425,10 @@ def read_size(req: BaseHTTPRequestHandler) -> int:
         raise ReqErr("invalid_content_length", code=400)
     if size < 0:
         raise ReqErr("invalid_content_length", code=400)
-    if size > _MAX_BODY:
+    if size > limit:
         req.close_connection = True
         raise ReqErr("payload_too_large", code=413,
-                     detail=f"max={_MAX_BODY}")
+                     detail=f"max={limit}")
     return size
 
 
@@ -8598,6 +8613,108 @@ def audit_detail_payload(req: BaseHTTPRequestHandler, cfg: dict, audit_id: str) 
         if r.get("id") == audit_id:
             return r
     raise ReqErr("not_found", code=404)
+
+
+# ── Vana DataConnect ingestion (optic/vana_ingest.py) ──────────────────────
+
+_VANA_UPLOAD_MAX_BODY = 8 * 1024 * 1024  # browser-uploaded export batches
+
+
+def _vana_uid(req: BaseHTTPRequestHandler) -> str:
+    """Per-user profile key derived from the frontend session cookie.
+
+    The Next.js proxy forwards headers, so the httpOnly `optic_session`
+    cookie (user id) reaches the backend. Hash it so the raw id never
+    lands in a filename.
+    """
+    cookie = req.headers.get("cookie", "") or ""
+    for part in cookie.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == "optic_session" and value:
+            return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    return "default"
+
+
+def vana_status_payload(cfg: dict) -> dict:
+    """GET /api/vana/status — discover local DataConnect export stores."""
+    if not _VANA_AVAILABLE:
+        raise ReqErr("vana_ingest_unavailable", code=503)
+    return _vana.status()
+
+
+def vana_profile_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """GET /api/vana/profile — return the persisted signal profile."""
+    if not _VANA_AVAILABLE:
+        raise ReqErr("vana_ingest_unavailable", code=503)
+    return _vana.profile_load(cfgmod.state_dir(cfg), uid=_vana_uid(req))
+
+
+def vana_ingest_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """POST /api/vana/ingest — scan local exports, audit, persist (desktop mode).
+
+    Body: {roots?: [str], include_ml?: bool, max_items?: int}
+    """
+    if not _VANA_AVAILABLE or not _OPTIC_AVAILABLE:
+        raise ReqErr("vana_ingest_unavailable", code=503)
+    data = body(req)
+    roots_raw = data.get("roots")
+    roots = None
+    if isinstance(roots_raw, list) and roots_raw:
+        roots = [Path(str(r)) for r in roots_raw[:10]]
+    include_ml = bool(data.get("include_ml", False))
+    try:
+        max_items = max(1, min(int(data.get("max_items", _vana.DEFAULT_MAX_ITEMS)), 10000))
+    except (TypeError, ValueError):
+        max_items = _vana.DEFAULT_MAX_ITEMS
+    profile = _vana.ingest(
+        cfgmod.state_dir(cfg),
+        _audit_build_auditor,
+        roots=roots,
+        include_ml=include_ml and _ML_AVAILABLE,
+        max_items=max_items,
+        uid=_vana_uid(req),
+    )
+    if profile["corpus"]["audited_items"] == 0:
+        raise ReqErr("no_exports_found", code=404)
+    profile["exists"] = True
+    return profile
+
+
+def vana_upload_payload(req: BaseHTTPRequestHandler, cfg: dict) -> dict:
+    """POST /api/vana/upload — batched browser upload of export files (hosted mode).
+
+    Body: {session: str, files: [{name?, data}], final?: bool, include_ml?: bool}
+    Non-final batches spool and return progress; the final batch (which may
+    carry zero files) triggers the audit and returns the profile.
+    """
+    if not _VANA_AVAILABLE or not _OPTIC_AVAILABLE:
+        raise ReqErr("vana_ingest_unavailable", code=503)
+    data = body(req, max_body=_VANA_UPLOAD_MAX_BODY)
+    session = str(data.get("session", "")).strip()
+    if not session:
+        raise ReqErr("missing_session", code=400)
+    uid = _vana_uid(req)
+    state = cfgmod.state_dir(cfg)
+
+    files = data.get("files", [])
+    if not isinstance(files, list):
+        raise ReqErr("invalid_files", code=400)
+    progress = _vana.spool_add(state, uid, session, files[:200]) if files else None
+
+    if not bool(data.get("final", False)):
+        if progress is None:
+            raise ReqErr("missing_files", code=400)
+        return progress
+
+    include_ml = bool(data.get("include_ml", False))
+    profile = _vana.spool_finalize(
+        state, _audit_build_auditor, uid, session,
+        include_ml=include_ml and _ML_AVAILABLE,
+    )
+    if profile["corpus"]["audited_items"] == 0:
+        raise ReqErr("no_text_found", code=422)
+    profile["exists"] = True
+    return profile
 
 
 def export_history_payload(cfg: dict) -> dict:

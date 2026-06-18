@@ -51,7 +51,13 @@ Both live in `.env.local` (gitignored). The frontend falls back to `https://app.
 
 **App shell:**
 - `app/app/page.tsx` — signal audit UI, calls backend via proxy
+- `app/app/profile/page.tsx` — persistent signal profile dashboard (Vana data)
 - `app/api/backend/[...path]/route.ts` — catch-all proxy to Python backend (strips `/api/backend` prefix, forwards body + headers)
+
+**Onboarding (Vana DataConnect):**
+- `app/onboarding/page.tsx` — post-signup flow: intro → connect → audit → signal profile payoff. Signup redirects here. Primary path (hosted, tryoptic.app): customer drags DataConnect export JSONs into the dropzone; files are parsed client-side, batched under the serverless request cap, uploaded to `POST /api/vana/upload`. Desktop path: local exports auto-detected via `/api/vana/status` poll → one-click direct ingest.
+- `components/vana/SignalProfile.tsx` — shared profile renderer (onboarding payoff + `/app/profile`)
+- DataConnect (github.com/vana-com/data-connect) is the open-source desktop app customers use to export their platform data (ChatGPT, LinkedIn, Instagram, GitHub, …) to their own disk.
 
 **Design tokens** in `app/globals.css`: `--color-cream`, `--color-ink`, `--color-muted`, `--color-border`, `--color-section-dark`. Use `var(--color-*)` or `[var(--color-*)]` in Tailwind.
 
@@ -74,6 +80,12 @@ Two Python packages co-located in `backend/src/`:
 - `POST /api/audit/ml` — ML-only detection
 - `POST /api/audit/batch` — batch audit
 - `GET /api/audit/history` — in-memory session history
+
+**Vana DataConnect routes** (powered by `optic/vana_ingest.py`; profiles keyed per user via `optic_session` cookie hash):
+- `GET /api/vana/status` — discover local DataConnect export stores (desktop mode)
+- `POST /api/vana/ingest` — desktop mode: scan local exports, normalize per-platform (conversations/memories/posts/bios audited; orders/history/playlists profiled), audit, persist. Body: `{roots?, include_ml?, max_items?}`
+- `POST /api/vana/upload` — hosted mode (tryoptic.app): batched browser upload of export files into a per-user spool; `{session, files:[{name,data}]}` per batch, `{session, final:true}` triggers the audit. 8MB body cap (vs 64KB default); client batches at ~2.5MB and splits oversized conversation files
+- `GET /api/vana/profile` — persisted per-user profile (`{state_dir}/vana_profile_{uid}.json`)
 
 **Config:** `config.json` (gitignored). Copy from `config.example.json` and set `home`, `target`, `state_dir`, `sources` to your local paths. State persists in the path set by `state_dir`.
 
